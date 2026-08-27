@@ -1,5 +1,6 @@
 [build]
-  publish = "."
+  command = "rm -rf dist && mkdir -p dist && unzip -q release/portal.zip -d dist"
+  publish = "dist"
 
 [[headers]]
   for = "/admin/*"
