@@ -14,7 +14,7 @@ Este diretório versiona o estado operacional necessário para a integração do
   - limpeza de credenciais não utilizadas.
 
 - `functions/portal-enrollment-submit/index.ts`
-  - snapshot da Edge Function ativa v9.
+  - snapshot da Edge Function ativa v10.
 
 - `functions/portal-first-access/index.ts`
   - função pública de primeiro acesso mantida desativada (HTTP 503), pois o envio de credenciais é manual pela Secretaria.
