@@ -1,0 +1,59 @@
+--- assets/js/v360/admin-central.js (V3.8)
++++ assets/js/v360/admin-central.js (V3.9)
+@@
+-const roleLabels={master_admin:'Proprietário',coadmin:'Coadministrador',diretoria:'Diretoria',admin_comercial:'Comercial',secretaria:'Secretaria',readonly:'Somente leitura'};
+@@
+-  if(access.master)groups.push(navGroup('MASTER',[navButton('master-access','Acessos e perfis','user'),...(access.owner?[navButton('master-approvals','Aprovações','shield')]:[]),navButton('integrations','Integrações','layers')]));
++  if(access.master)groups.push(navGroup('GESTÃO',[navButton('master-access','Pessoas e acessos','user'),navButton('integrations','Integrações','layers')]));
+@@
+-  <aside class="portal-side admin-side central-side"><img src="/assets/images/logo.png?v=2216" width="145" height="64" alt="Live Connect"><div class="admin-profile"><span>${icon('user')}</span><div><strong>${esc(profile.full_name||'Administrador')}</strong><small>${esc(roleLabels[profile.role]||profile.role)}</small></div></div><nav>${groups.join('')}</nav><button class="portal-logout" type="button" data-auth-logout>${icon('logout')} Sair</button></aside>
++  <aside class="portal-side admin-side central-side"><img src="/assets/images/logo.png?v=2216" width="145" height="64" alt="Live Connect"><div class="admin-profile"><span>${icon('user')}</span><div><strong>${esc(profile.full_name||'Usuário')}</strong><small>Live Connect</small></div></div><nav>${groups.join('')}</nav><button class="portal-logout" type="button" data-auth-logout>${icon('logout')} Sair</button></aside>
+@@
+-<span class="status-chip status-online">${icon('shield')} ${esc(roleLabels[profile.role]||profile.role)}</span>
++<span class="status-chip status-online">${icon('user')} ${esc(profile.full_name||'Usuário')}</span>
+@@
+-      if(view==='master-approvals')return renderApprovals(target);
+@@
+-    const roles=[['master_admin','Proprietário'],['coadmin','Coadministrador'],['diretoria','Diretoria'],['admin_comercial','Comercial'],['secretaria','Secretaria'],['readonly','Somente leitura']];
+-    const bodyRows=rows.map(r=>{
+-      const ownerRow=r.role==='master_admin';
+-      const protectedRow=ownerRow || (access.owner&&r.id===profile.id);
+-      const self=r.id===profile.id;
+-      return [
+-        r.full_name,
+-        {raw:select(roles,r.role,`data-profile-role="${r.id}" ${protectedRow?'disabled':''}`)},
+-        {raw:`<label class="central-switch"><input type="checkbox" data-profile-active="${r.id}" ${r.active?'checked':''} ${protectedRow?'disabled':''}><span></span></label>`},
+-        r.last_seen_at?formatDate(r.last_seen_at,{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—',
+-        {raw:ownerRow?`<span class="status-chip status-online">${self?'Você • ':''}Proprietário protegido</span>`:btn(access.coadmin?'Solicitar alteração':'Salvar',`data-profile-save="${r.id}"`,'primary')}
+-      ];
+-    });
+-    const accessTable=table(['Nome','Perfil','Ativo','Último acesso','Ação'],bodyRows);
++    const bodyRows=rows.map(r=>{
++      const ownerRow=r.id===profile.id && access.owner;
++      return [
++        r.full_name,
++        {raw:`<label class="central-switch"><input type="checkbox" data-profile-active="${r.id}" ${r.active?'checked':''} ${ownerRow?'disabled':''}><span></span></label>`},
++        r.last_seen_at?formatDate(r.last_seen_at,{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—',
++        {raw:ownerRow?`<span class="status-chip status-online">${icon('shield')} Protegido</span>`:btn('Salvar',`data-profile-save="${r.id}" data-profile-role-current="${esc(r.role)}"`,'primary')}
++      ];
++    });
++    const accessTable=table(['Pessoa','Ativo','Último acesso','Ação'],bodyRows);
+@@
+-      const role=target.querySelector(`[data-profile-role="${id}"]`).value;
++      const role=b.dataset.profileRoleCurrent;
+@@
+-        const result=unwrap(await adminRpcStrict('school_master_set_profile',{p_profile_id:id,p_role:role,p_active:active}));
+-        if(result?.pending_approval)toast('Alteração enviada para aprovação do proprietário.','success');
+-        else toast('Acesso atualizado.','success');
++        await adminRpcStrict('school_master_set_profile',{p_profile_id:id,p_role:role,p_active:active});
++        toast('Acesso atualizado.','success');
+@@
+-  function approvalDescription(r){...}
+-  async function renderApprovals(target){...}
++  // approval UI removed: both administrative people have equivalent privileges
+@@
+-    if(!access.master)throw new Error('Acesso exclusivo do Master.');
++    if(!access.master)throw new Error('Acesso exclusivo da gestão.');
+@@
+-    target.innerHTML=`${areaTitle('MASTER','Integrações',
++    target.innerHTML=`${areaTitle('GESTÃO','Integrações',
