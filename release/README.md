@@ -1,45 +1,28 @@
-# Pacote de produção
+# Pacotes de produção
 
-O deploy do frontend usa um pacote ZIP na raiz desta pasta com o nome:
+## Admin Live Connect
 
-`portal.zip`
+Destino oficial:
 
-O `netlify.toml` descompacta esse arquivo para `dist/` durante o build.
+`https://admin.liveconnectios.workers.dev/`
 
-## Versão de referência
+Versão de referência do Admin:
 
-**V4.2 — Editor visual de matrícula**
+**V4.4 — Revisão estrutural de Produto, UI e UX**
 
-A V4.2 substitui a edição bruta de `enrollments` em JSON por um editor visual.
+Principais mudanças:
+- correção do deslocamento duplo da sidebar que espremia o conteúdo;
+- layout desktop passa a usar toda a largura restante da viewport;
+- cards, métricas, filtros e painéis com densidade revisada;
+- tabelas de uso comum deixam de forçar rolagem horizontal em desktop;
+- datasets realmente largos continuam protegidos por scroll interno;
+- no mobile, tabelas viram cards com rótulos;
+- sidebar vira drawer;
+- modais e Editor 360° responsivos;
+- cache-busting V4.4 nos assets principais.
 
-O modal apresenta:
-- aluno e curso atual;
-- curso por nome, sem editar UUID;
-- turma;
-- vencimento;
-- data de início;
-- horário / agenda;
-- método de pagamento;
-- situação da matrícula;
-- situação da primeira mensalidade;
-- valor de matrícula;
-- primeira mensalidade;
-- mensalidade;
-- modalidade comercial;
-- parcelas;
-- total do curso;
-- observações;
-- encerrar/restaurar curso;
-- atalho para o Cadastro 360° completo.
+O Admin é tratado como aplicação independente do Portal.
 
-IDs técnicos e JSON deixam de fazer parte do fluxo normal do admin.
+## Portal público
 
-A V4.2 preserva:
-- múltiplos cursos por aluno;
-- troca de curso com recálculo financeiro;
-- Editor 360°;
-- ficha Jovem Aprendiz;
-- fichas de cursos gratuitos;
-- integrações existentes.
-
-O pacote local de release deve ser publicado como `release/portal.zip` antes do deploy do frontend.
+O Portal permanece separado do Admin. Alterações de UI do Admin não exigem novo deploy do Portal público.
