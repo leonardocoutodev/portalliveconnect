@@ -1,0 +1,58 @@
+--- assets/js/v360/admin-central.js (V3.7)
++++ assets/js/v360/admin-central.js (V3.8)
+@@
+-const roleLabels={master_admin:'Master',diretoria:'Diretoria',admin_comercial:'Comercial',secretaria:'Secretaria',readonly:'Somente leitura'};
++const roleLabels={master_admin:'Proprietário',coadmin:'Coadministrador',diretoria:'Diretoria',admin_comercial:'Comercial',secretaria:'Secretaria',readonly:'Somente leitura'};
+@@
+-  if(access.master)groups.push(navGroup('MASTER',[navButton('master-access','Acessos e perfis','user'),navButton('integrations','Integrações','layers')]));
++  if(access.master)groups.push(navGroup('MASTER',[navButton('master-access','Acessos e perfis','user'),...(access.owner?[navButton('master-approvals','Aprovações','shield')]:[]),navButton('integrations','Integrações','layers')]));
+@@
++      if(view==='master-approvals')return renderApprovals(target);
+@@ campaign create
+-        await adminRpcStrict('school_commercial_create_campaign',payload);
+-        toast('Campanha semanal publicada e preços atualizados.','success');await renderCampaigns(target);
++        const result=unwrap(await adminRpcStrict('school_commercial_create_campaign',payload));
++        if(result?.pending_approval) toast('Campanha enviada para aprovação do proprietário.','success');
++        else toast('Campanha semanal publicada e preços atualizados.','success');
++        await renderCampaigns(target);
+@@ campaign toggle
+-    target.querySelectorAll('[data-campaign-toggle]').forEach(b=>b.addEventListener('click',async()=>{b.disabled=true;try{await adminRpcStrict('school_commercial_set_campaign_active',{p_campaign_id:b.dataset.campaignToggle,p_active:b.dataset.active!=='1'});toast('Campanha atualizada.','success');await renderCampaigns(target);}catch(err){toast(err.message||'Falha ao atualizar campanha.','error');b.disabled=false;}}));
++    target.querySelectorAll('[data-campaign-toggle]').forEach(b=>b.addEventListener('click',async()=>{b.disabled=true;try{const result=unwrap(await adminRpcStrict('school_commercial_set_campaign_active',{p_campaign_id:b.dataset.campaignToggle,p_active:b.dataset.active!=='1'}));if(result?.pending_approval)toast('Alteração enviada para aprovação do proprietário.','success');else toast('Campanha atualizada.','success');await renderCampaigns(target);}catch(err){toast(err.message||'Falha ao atualizar campanha.','error');b.disabled=false;}}));
+@@ access roles
+-    const roles=[['master_admin','Master'],['diretoria','Diretoria'],['admin_comercial','Comercial'],['secretaria','Secretaria'],['readonly','Somente leitura']];
++    const roles=[['master_admin','Proprietário'],['coadmin','Coadministrador'],['diretoria','Diretoria'],['admin_comercial','Comercial'],['secretaria','Secretaria'],['readonly','Somente leitura']];
+@@
++  function approvalDescription(r){
++    if(r.action==='profile_access_update')return `Alterar acesso de perfil para ${roleLabels[r.payload?.role]||r.payload?.role||'outro papel'} • ${r.payload?.active===false?'desativar':'manter ativo'}`;
++    if(r.action==='campaign_create_sensitive')return `Publicar campanha “${r.payload?.name||r.payload?.title||'sem nome'}”${r.payload?.apply_pricing?' com alteração de preços':''}`;
++    if(r.action==='campaign_toggle_sensitive')return `${r.payload?.active?'Ativar':'Pausar'} campanha pública vinculada à precificação`;
++    if(r.action==='lead_hard_delete')return 'Excluir lead definitivamente';
++    return r.action||'Ação administrativa';
++  }
++
++  async function renderApprovals(target){
++    if(!access.owner)throw new Error('Acesso exclusivo do proprietário.');
++    const rows=await adminRpcStrict('school_owner_approval_queue',{p_status:'pending',p_limit:200});
++    const bodyRows=rows.map(r=>[
++      r.requester_name||'Coadministrador',
++      approvalDescription(r),
++      r.entity_type||'—',
++      formatDate(r.requested_at,{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}),
++      {raw:`<div class="inline-editor">${btn('Aprovar',`data-approval-approve="${r.request_id}"`,'primary')}${btn('Rejeitar',`data-approval-reject="${r.request_id}"`,'secondary')}</div>`}
++    ]);
++    target.innerHTML=`${areaTitle('MASTER','Aprovações','Ações críticas de coadministradores só são executadas depois da sua decisão.')}
++      <div class="admin-metrics central-metrics">${metric('shield','Pendentes',rows.length,rows.length?'Exigem sua decisão':'Nenhuma ação aguardando')}</div>
++      ${panel('Fila de aprovação','SEGURANÇA',table(['Solicitante','Ação','Entidade','Solicitado em','Decisão'],bodyRows),btn('Atualizar','data-refresh-approvals','secondary'))}`;
++    target.querySelector('[data-refresh-approvals]')?.addEventListener('click',()=>renderApprovals(target));
++    target.querySelectorAll('[data-approval-approve]').forEach(b=>b.addEventListener('click',async()=>{
++      if(!confirm('Aprovar e executar esta ação crítica?'))return;
++      b.disabled=true;
++      try{await adminRpcStrict('school_owner_decide_approval',{p_request_id:b.dataset.approvalApprove,p_approve:true,p_note:null});toast('Ação aprovada e executada.','success');await renderApprovals(target);}catch(err){toast(err.message||'Não foi possível aprovar.','error');b.disabled=false;}
++    }));
++    target.querySelectorAll('[data-approval-reject]').forEach(b=>b.addEventListener('click',async()=>{
++      if(!confirm('Rejeitar esta ação crítica?'))return;
++      const note=prompt('Motivo da rejeição (opcional):','')||null;
++      b.disabled=true;
++      try{await adminRpcStrict('school_owner_decide_approval',{p_request_id:b.dataset.approvalReject,p_approve:false,p_note:note});toast('Ação rejeitada.','success');await renderApprovals(target);}catch(err){toast(err.message||'Não foi possível rejeitar.','error');b.disabled=false;}
++    }));
++  }
