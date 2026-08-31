@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
-const PORTAL_ORIGIN='https://portallc.netlify.app'
-const allowedOrigins=new Set([PORTAL_ORIGIN,'https://liveconnect.com.br','https://www.liveconnect.com.br'])
+const PORTAL_ORIGIN='https://www.liveconnect.com.br'
+const allowedOrigins=new Set([PORTAL_ORIGIN,'https://liveconnect.com.br','https://portallc.netlify.app'])
 function originAllowed(origin:string){return !origin||allowedOrigins.has(origin)||origin.startsWith('http://localhost:')||origin.startsWith('http://127.0.0.1:')||/^https:\/\/[a-z0-9-]+--portallc\.netlify\.app$/i.test(origin)}
 function cors(req:Request){const origin=req.headers.get('origin')||'';return {'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':originAllowed(origin)&&origin?origin:PORTAL_ORIGIN,'Vary':'Origin','Access-Control-Allow-Headers':'content-type, apikey, x-client-info','Access-Control-Allow-Methods':'POST, OPTIONS','Cache-Control':'no-store, max-age=0'}}
 const dueDays=new Set([5,10,15,20,25,30]);const modalities=new Set(['Presencial','EAD']);const instructionModels=new Set(['padrao','professor_em_sala'])
@@ -14,7 +14,7 @@ Deno.serve(async(req:Request)=>{
  if(req.method==='OPTIONS')return new Response('ok',{headers:cors(req)});if(req.method!=='POST')return reply(req,{ok:false,error:'method_not_allowed'},405)
  const origin=req.headers.get('origin')||'';if(!originAllowed(origin))return reply(req,{ok:false,error:'origin_not_allowed'},403)
  try{
-  const body=await req.json();if(text(body.website,200))return reply(req,{ok:true});const courseType=body.course_type==='gratuito'?'gratuito':'pago';const courseName=text(body.course_name,180),fullName=text(body.full_name,160),whatsapp=digits(body.whatsapp),studentEmail=email(body.email);if(!courseName||fullName.length<3||whatsapp.length<10||whatsapp.length>13)return reply(req,{ok:false,error:'basic_data_invalid'},400);if(body.email&&!studentEmail)return reply(req,{ok:false,error:'invalid_email'},400)
+  const body=await req.json();if(text(body.website,200))return reply(req,{ok:true});const courseType=body.course_type==='gratuito'?'gratuito':'pago';const courseName=text(body.course_name,180),fullName=text(body.full_name,160),whatsapp=digits(body.whatsapp),studentEmail=email(body.email);if(!courseName||fullName.length<3||whatsapp.length<10||whatsapp.length>13)return reply(req,{ok:false,error:'basic_data_invalid'},400);if(courseType==='pago'&&!studentEmail)return reply(req,{ok:false,error:'email_required'},400);if(body.email&&!studentEmail)return reply(req,{ok:false,error:'invalid_email'},400)
   const url=Deno.env.get('SUPABASE_URL')!;const raw=Deno.env.get('SUPABASE_SECRET_KEYS');const secret=raw?JSON.parse(raw)['default']:Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;const supabase=createClient(url,secret,{auth:{persistSession:false,autoRefreshToken:false}})
   let modality=courseType==='gratuito'?'Presencial':text(body.modality,20);if(!modalities.has(modality))return reply(req,{ok:false,error:'invalid_modality'},400);let instructionModel=text(body.instruction_model,30)||'padrao';if(!instructionModels.has(instructionModel))instructionModel='padrao';if(modality==='EAD')instructionModel='padrao'
   let preferredClassId:string|null=null,preferredWeekday:number|null=null,preferredStart:string|null=null,preferredEnd:string|null=null,scheduleText='EAD - sem horário presencial',remainingSnapshot:number|null=null
