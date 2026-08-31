@@ -14,72 +14,81 @@ Portal institucional, comercial e acadêmico da Live Connect Escola de Profissõ
 
 V3.4 — UI/UX Hardening
 
-## Marco operacional — matrícula automática Ouro Moderno (31/08/2026)
+## Fluxo operacional vigente — matrícula automática Ouro Moderno (31/08/2026)
 
-O Portal Live Connect passou a criar matrículas diretamente pela integração autorizada com a Ouro Moderno.
+A matrícula não depende mais de aprovação manual da Secretaria.
 
-Fluxo operacional:
+Fluxo:
 
 1. ficha de matrícula no Portal;
-2. pagamento aprovado;
-3. aprovação e reserva de turma pela Secretaria;
-4. identificação ou criação do aluno na Ouro Moderno;
-5. resolução dos cursos Ouro pelo mapeamento acadêmico do Portal;
-6. matrícula dos cursos na Ouro;
-7. verificação independente dos cursos vinculados ao aluno;
-8. ocupação definitiva da vaga da turma e confirmação da matrícula no Portal.
+2. pagamento aprovado ou matrícula isenta, conforme a regra comercial;
+3. o gatilho de pagamento inicia automaticamente o processamento;
+4. se a modalidade for presencial, o Portal reserva automaticamente uma vaga na turma selecionada;
+5. o Portal identifica ou cria o aluno na Ouro Moderno;
+6. resolve os cursos Ouro pelo mapeamento acadêmico;
+7. matricula somente os cursos ainda não vinculados ao aluno;
+8. verifica a matrícula diretamente na Ouro;
+9. confirma a ocupação da vaga presencial, quando aplicável;
+10. conclui a fila como `matriculada_ouro`;
+11. a matrícula entra na fila de credenciais pendentes para envio manual pela Secretaria.
 
 Controles incorporados:
 
-- idempotência para evitar duplicidade de aluno e de cursos;
+- idempotência para evitar duplicidade de aluno e cursos;
+- validação de que a turma pertence ao curso da matrícula;
+- tratamento separado para Presencial e EAD;
 - registro do ID do aluno Ouro, IDs dos cursos e contratos;
-- contador e horário das tentativas;
-- registro sanitizado de erros e retornos;
-- reprocessamento seguro pela Secretaria;
-- fallback manual quando a integração não puder concluir;
-- bloqueio quando o curso não possuir mapeamento Ouro confiável;
+- contador e horário de tentativas;
+- reprocessamento automático a cada 5 minutos para falhas transitórias, limitado por tentativas;
+- erro explícito quando não houver turma/vaga/mapeamento válido;
 - auditoria de sucesso e falha.
 
-## Primeiro acesso do aluno — backend incorporado
+## Primeiro acesso e WhatsApp
 
-O backend captura a senha inicial retornada pela Ouro somente no momento da criação de um novo aluno e a armazena criptografada no schema privado do Supabase.
+O envio das credenciais é deliberadamente manual.
 
-Controles incorporados:
+Para aluno novo:
 
-- chave de criptografia guardada no Vault;
-- senha nunca gravada em leads, fila pública, logs ou auditoria;
-- tabela de credenciais em schema privado com RLS;
-- credenciais iniciais não utilizadas são apagadas automaticamente após 72 horas;
-- alunos já existentes não recebem senha inventada; usam o acesso existente ou recuperação de senha;
-- o endpoint `portal-enrollment-submit` está na versão 9 e aceita e-mail quando fornecido sem apagar e-mails antigos quando o campo não vier preenchido.
+1. a Ouro cria o aluno e devolve usuário + senha inicial;
+2. a senha inicial é criptografada no schema privado;
+3. a matrícula aparece para a Secretaria como credencial pendente;
+4. a Secretaria abre a mensagem pronta;
+5. envia a mensagem manualmente pelo WhatsApp;
+6. marca como enviada;
+7. a senha inicial é eliminada do banco após a confirmação de envio.
 
-A Ouro foi validada em primeiro acesso: após autenticação com a senha inicial, o aluno recebe a tela obrigatória "Atualizar Senha", com senha atual, nova senha e confirmação.
+No primeiro login, a própria Ouro obriga o aluno a criar uma nova senha pessoal.
 
-## Entrega segura — estado atual
+Para aluno já existente na Ouro:
 
-Foi identificado que tokens enviados em query string aparecem nos logs de Edge Functions. Por segurança, a entrega por link foi desativada até que a página de primeiro acesso seja implementada no frontend real do Portal utilizando fragmento `#` + POST, sem registrar o token na URL do servidor.
+- o Portal não cria nem inventa uma nova senha;
+- a Secretaria envia o usuário existente e a orientação para usar a senha atual ou “Esqueceu a senha?”.
 
-A Edge Function `portal-first-access` está em modo seguro/indisponível (HTTP 503) e não entrega credenciais enquanto o frontend correto não estiver publicado.
+Funções operacionais:
+
+- `school_secretary_pending_credentials` — lista matrículas aguardando WhatsApp;
+- `school_secretary_prepare_first_access` — monta a mensagem e disponibiliza usuário/senha inicial somente para Secretaria autenticada;
+- `school_secretary_mark_credentials_whatsapp_sent` — registra o envio e elimina a senha inicial.
+
+As funções de credenciais não podem ser executadas pelo papel anônimo.
+
+## Segurança das credenciais
+
+- chave de criptografia no Vault;
+- senha nunca gravada em leads, fila pública ou logs;
+- tabela de credenciais no schema privado com RLS;
+- credenciais iniciais não utilizadas são eliminadas automaticamente após 72 horas;
+- nenhuma automação de e-mail para credenciais;
+- a Edge Function pública de primeiro acesso permanece desativada, pois o envio passou a ser exclusivamente manual via Secretaria/WhatsApp.
 
 ## Frontend
 
-O repositório `portalliveconnect` contém apenas documentação.
+O repositório `portalliveconnect` contém somente documentação.
 
 A conta Netlify conectada não contém o projeto `portallc`.
 
-Na Vercel foram localizados os projetos:
-- `portal-live-connect-2026`
-- `portal-live-connect-2026-v2`
-- `portal-live-connect-2026-preview`
-- `portal-live-connect-2026-v3`
-- `portal-live-connect-2026-v4`
+Na Vercel foram localizados protótipos `portal-live-connect-2026` até `portal-live-connect-2026-v4`. A v4 ainda contém fluxos demonstrativos e não deve substituir a produção.
 
-A versão v4 é um protótipo demonstrativo e não deve substituir a produção: o próprio código ainda simula matrícula, Ouro e pagamento.
-
-## Automação de e-mail
-
-O backend já preserva e-mail do aluno quando recebido pela ficha e registra o estado da entrega de credenciais.
-
-Ainda não existe provedor de e-mail transacional configurado no Supabase Vault. Para envio automático é necessário configurar um provedor de e-mail transacional compatível com Edge Functions (ex.: Resend, Postmark ou SendGrid).
+O backend operacional está preparado para o painel real da Secretaria consumir as funções de credenciais quando o frontend de produção estiver disponível para edição.
 
 A credencial da API Ouro permanece no Vault/Supabase e não é exposta ao navegador.
