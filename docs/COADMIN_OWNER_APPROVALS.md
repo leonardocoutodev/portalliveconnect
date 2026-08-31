@@ -10,7 +10,7 @@
 ## Ações críticas cobertas
 
 - Alterações de acessos e perfis.
-- Exclusão definitiva de lead.
+- Exclusões definitivas em leads, cursos, matrículas, turmas, contratos, pagamentos, campanhas, relatórios e demais registros administrativos protegidos.
 - Campanhas que substituem oferta pública ou alteram precificação.
 - Ativação/pausa de campanha pública vinculada a preço.
 - Escritas diretas em `pricing_versions`, `site_settings` e `contract_templates`.
