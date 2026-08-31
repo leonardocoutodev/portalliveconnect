@@ -376,3 +376,123 @@ $$;
 update public.profiles
 set full_name='Monique Gomes',role='coadmin'::public.user_role,active=true,updated_at=now()
 where id='42126430-9593-40ee-9ef1-5380842f6fb0'::uuid;
+
+
+-- Permanent deletes by coadmin are approval-gated even when legacy RLS has permissive ALL policies.
+create or replace function private.queue_coadmin_permanent_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path='pg_catalog','public','private'
+as $$
+declare rid uuid;
+begin
+  if not public.is_coadmin() then return old; end if;
+  rid:=public.school_request_critical_action(
+    'permanent_delete',
+    tg_table_name,
+    old.id,
+    jsonb_build_object('table',tg_table_name,'old',to_jsonb(old))
+  );
+  return null;
+end
+$$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'campaigns','classes','commercial_goals','contracts','course_categories','courses','enrollments',
+    'followups','lead_activities','lead_interests','lead_notes','leads','message_templates','notifications',
+    'payments','reports','waiting_list'
+  ]
+  loop
+    execute format('drop trigger if exists trg_coadmin_delete_approval on public.%I',t);
+    execute format('create trigger trg_coadmin_delete_approval before delete on public.%I for each row execute function private.queue_coadmin_permanent_delete()',t);
+  end loop;
+end
+$$;
+
+create or replace function private.execute_permanent_delete(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path='pg_catalog','public','private'
+as $$
+declare
+  t text:=p->>'table';
+  row_id uuid:=nullif(p->'old'->>'id','')::uuid;
+  allowed text[]:=array[
+    'campaigns','classes','commercial_goals','contracts','course_categories','courses','enrollments',
+    'followups','lead_activities','lead_interests','lead_notes','leads','message_templates','notifications',
+    'payments','reports','waiting_list'
+  ];
+begin
+  if not public.is_owner() then raise exception 'owner_only' using errcode='42501'; end if;
+  if not (t=any(allowed)) then raise exception 'unsupported_delete_table:%',t; end if;
+  if row_id is null then raise exception 'delete_id_required'; end if;
+  execute format('delete from public.%I where id=$1',t) using row_id;
+  return jsonb_build_object('table',t,'id',row_id,'deleted',true);
+end
+$$;
+
+revoke all on function private.execute_permanent_delete(jsonb) from public,anon,authenticated;
+
+-- Re-declare owner decision RPC with permanent_delete support.
+create or replace function public.school_owner_decide_approval(p_request_id uuid,p_approve boolean,p_note text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path='pg_catalog','public','private'
+as $$
+declare v public.admin_approval_requests%rowtype; result jsonb:='{}'::jsonb;
+begin
+  if not public.is_owner() then raise exception 'owner_only' using errcode='42501'; end if;
+  select * into v from public.admin_approval_requests where id=p_request_id for update;
+  if not found then raise exception 'approval_not_found' using errcode='P0002'; end if;
+  if v.status<>'pending' then raise exception 'approval_already_decided' using errcode='22023'; end if;
+
+  if not coalesce(p_approve,false) then
+    update public.admin_approval_requests set status='rejected',decided_by=auth.uid(),decided_at=now(),decision_note=nullif(trim(p_note),'') where id=p_request_id;
+    insert into public.audit_logs(user_id,action,entity_type,entity_id,metadata)
+    values(auth.uid(),'critical_action_rejected',coalesce(v.entity_type,'approval'),v.entity_id,jsonb_build_object('request_id',v.id,'requested_action',v.action,'requester_id',v.requester_id));
+    return jsonb_build_object('ok',true,'status','rejected','request_id',v.id);
+  end if;
+
+  update public.admin_approval_requests set status='approved',decided_by=auth.uid(),decided_at=now(),decision_note=nullif(trim(p_note),'') where id=p_request_id;
+
+  begin
+    if v.action='profile_access_update' then
+      result:=public.school_master_set_profile(v.entity_id,v.payload->>'role',coalesce((v.payload->>'active')::boolean,true));
+    elsif v.action='lead_hard_delete' then
+      perform public.admin_hard_delete_lead(v.entity_id);
+      result:=jsonb_build_object('deleted',true,'lead_id',v.entity_id);
+    elsif v.action='campaign_toggle_sensitive' then
+      result:=public.school_commercial_set_campaign_active(v.entity_id,coalesce((v.payload->>'active')::boolean,false));
+    elsif v.action='campaign_create_sensitive' then
+      result:=public.school_commercial_create_campaign(
+        v.payload->>'name',v.payload->>'title',v.payload->>'short_description',v.payload->>'offer_text',v.payload->>'public_badge',
+        nullif(v.payload->>'start_date','')::date,nullif(v.payload->>'end_date','')::date,coalesce((v.payload->>'priority')::integer,10),
+        coalesce((v.payload->>'show_home')::boolean,true),coalesce((v.payload->>'show_course_pages')::boolean,true),coalesce((v.payload->>'show_popup')::boolean,false),
+        nullif(v.payload->>'enrollment_fee','')::numeric,nullif(v.payload->>'monthly_fee','')::numeric,nullif(v.payload->>'beauty_surcharge','')::numeric,
+        coalesce((v.payload->>'apply_pricing')::boolean,false),coalesce((v.payload->>'replace_public')::boolean,true),coalesce((v.payload->>'installments')::integer,12),
+        coalesce((v.payload->>'fast_track_enabled')::boolean,true),coalesce(v.payload->'fast_track_benefits','[]'::jsonb),nullif(v.payload->>'late_fee','')::numeric
+      );
+    elsif v.action='sensitive_dml' then
+      result:=private.execute_sensitive_dml(v.payload);
+    elsif v.action='permanent_delete' then
+      result:=private.execute_permanent_delete(v.payload);
+    else
+      raise exception 'unsupported_approval_action:%',v.action;
+    end if;
+
+    update public.admin_approval_requests set status='executed',executed_at=now(),execution_result=result,execution_error=null where id=p_request_id;
+    insert into public.audit_logs(user_id,action,entity_type,entity_id,metadata)
+    values(auth.uid(),'critical_action_approved',coalesce(v.entity_type,'approval'),v.entity_id,jsonb_build_object('request_id',v.id,'requested_action',v.action,'requester_id',v.requester_id));
+    return jsonb_build_object('ok',true,'status','executed','request_id',v.id,'result',result);
+  exception when others then
+    update public.admin_approval_requests set status='failed',executed_at=now(),execution_error=left(sqlerrm,500) where id=p_request_id;
+    raise;
+  end;
+end
+$$;
