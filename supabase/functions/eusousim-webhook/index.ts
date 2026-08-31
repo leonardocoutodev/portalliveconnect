@@ -45,10 +45,8 @@ async function syncFollowup(endpoint:JsonRecord,leadId:string,externalLeadId:str
     return {action:"completed"};
   }
   if(!appointmentStage(parsed.stageName))return {action:"none"};
-  if(!parsed.appointmentAt&&historicalImport)return {action:"historical_without_time"};
-
   const needsTime=!parsed.appointmentAt;
-  const scheduledAt=parsed.appointmentAt||now;
+  const scheduledAt=parsed.appointmentAt||null;
   const note=needsTime
     ? "[Eu Sou SIM] Confirmar data e hora da visita. O webhook informou visita/reagendamento sem horário."
     : `[Eu Sou SIM] Visita sincronizada para ${new Date(parsed.appointmentAt).toLocaleString("pt-BR",{timeZone:"America/Bahia"})}.`;
