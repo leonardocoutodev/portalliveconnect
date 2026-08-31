@@ -122,3 +122,27 @@ revoke all on function public.admin_mark_young_apprentice_registration_printed(u
 grant execute on function public.admin_mark_young_apprentice_registration_printed(uuid) to authenticated;
 revoke all on function public.school_commercial_set_young_apprentice_status(uuid,text) from public,anon;
 grant execute on function public.school_commercial_set_young_apprentice_status(uuid,text) to authenticated;
+
+
+-- Security hardening: explicit RLS + SECURITY INVOKER admin RPCs.
+grant select,update on public.young_apprentice_registration_forms to authenticated;
+
+drop policy if exists "young forms admin select" on public.young_apprentice_registration_forms;
+create policy "young forms admin select"
+on public.young_apprentice_registration_forms
+for select
+to authenticated
+using (public.is_admin_comercial());
+
+drop policy if exists "young forms admin update" on public.young_apprentice_registration_forms;
+create policy "young forms admin update"
+on public.young_apprentice_registration_forms
+for update
+to authenticated
+using (public.is_admin_comercial())
+with check (public.is_admin_comercial());
+
+alter function public.school_commercial_young_apprentice_registrations(integer) security invoker;
+alter function public.admin_get_young_apprentice_registration_form(uuid) security invoker;
+alter function public.admin_mark_young_apprentice_registration_printed(uuid) security invoker;
+alter function public.school_commercial_set_young_apprentice_status(uuid,text) security invoker;
