@@ -91,9 +91,6 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return response(405, { ok: false, error: "method_not_allowed" });
   }
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !BRIDGE_URL || BRIDGE_SECRET.length < 32) {
-    return response(503, { ok: false, error: "dkweb_service_not_configured" });
-  }
   const authorization = req.headers.get("authorization") ?? "";
   if (!authorization.toLowerCase().startsWith("bearer ")) {
     return response(401, { ok: false, error: "unauthorized" });
@@ -101,6 +98,9 @@ Deno.serve(async (req: Request) => {
   const sessionToken = authorization.slice(7).trim();
   if (sessionToken.length < 32 || sessionToken.length > 180) {
     return response(401, { ok: false, error: "unauthorized" });
+  }
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !BRIDGE_URL || BRIDGE_SECRET.length < 32) {
+    return response(503, { ok: false, error: "dkweb_service_not_configured" });
   }
   let body: Record<string, unknown> = {};
   try {
