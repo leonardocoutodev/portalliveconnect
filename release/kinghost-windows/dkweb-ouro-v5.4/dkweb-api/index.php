@@ -41,58 +41,35 @@ function query_rows(mysqli $db, string $sql, string $types = '', array $params =
         $stmt->close();
         throw new RuntimeException('query_execute_failed');
     }
-    $result = $stmt->get_result();
-    if (!$result) {
+    $metadata = $stmt->result_metadata();
+    if (!$metadata) {
         $stmt->close();
-        throw new RuntimeException('mysqlnd_required');
+        throw new RuntimeException('query_metadata_failed');
     }
+    $fields = $metadata->fetch_fields();
+    $row = array();
+    $bind = array();
+    foreach ($fields as $field) {
+        $row[$field->name] = null;
+        $bind[] = &$row[$field->name];
+    }
+    call_user_func_array(array($stmt, 'bind_result'), $bind);
     $rows = array();
-    while ($row = $result->fetch_assoc()) {
-        $rows[] = $row;
+    while ($stmt->fetch()) {
+        $record = array();
+        foreach ($row as $name => $value) {
+            $record[$name] = $value;
+        }
+        $rows[] = $record;
     }
-    $result->free();
+    $metadata->free();
     $stmt->close();
     return $rows;
-}
-
-function execute_statement(mysqli $db, string $sql, string $types, array $params): void
-{
-    $stmt = $db->prepare($sql);
-    if (!$stmt) {
-        throw new RuntimeException('query_prepare_failed');
-    }
-    $refs = array($types);
-    foreach ($params as $index => $value) {
-        $refs[] = &$params[$index];
-    }
-    call_user_func_array(array($stmt, 'bind_param'), $refs);
-    if (!$stmt->execute()) {
-        $stmt->close();
-        throw new RuntimeException('query_execute_failed');
-    }
-    $stmt->close();
 }
 
 function normalize_document(string $value): string
 {
     return preg_replace('/\D+/', '', $value) ?: '';
-}
-
-function ensure_link_table(mysqli $db): void
-{
-    $sql = "CREATE TABLE IF NOT EXISTS dkweb_ouro_links (
-        ouro_subject_hash CHAR(64) NOT NULL,
-        id_aluno INT(10) UNSIGNED NOT NULL,
-        codigo_escola VARCHAR(20) NOT NULL,
-        match_method VARCHAR(20) NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        last_seen_at DATETIME NOT NULL,
-        PRIMARY KEY (ouro_subject_hash),
-        KEY idx_dkweb_student (id_aluno, codigo_escola)
-    ) ENGINE=InnoDB DEFAULT CHARSET=ascii";
-    if (!$db->query($sql)) {
-        throw new RuntimeException('link_table_failed');
-    }
 }
 
 function resolve_student(mysqli $db, array $identity): array
@@ -101,27 +78,6 @@ function resolve_student(mysqli $db, array $identity): array
     if ($subject === '' || strlen($subject) > 255) {
         respond(401, array('ok' => false, 'error' => 'ouro_identity_invalid'));
     }
-    $subjectHash = hash('sha256', $subject);
-    $linked = query_rows(
-        $db,
-        "SELECT l.id_aluno, l.codigo_escola, a.matricula, a.nome
-         FROM dkweb_ouro_links l
-         INNER JOIN alunos a ON a.id_aluno = l.id_aluno AND a.codigo_escola = l.codigo_escola
-         WHERE l.ouro_subject_hash = ? LIMIT 1",
-        's',
-        array($subjectHash)
-    );
-    if (count($linked) === 1) {
-        execute_statement(
-            $db,
-            "UPDATE dkweb_ouro_links SET last_seen_at = NOW() WHERE ouro_subject_hash = ?",
-            's',
-            array($subjectHash)
-        );
-        $linked[0]['match_method'] = 'stored_link';
-        return $linked[0];
-    }
-
     $cpf = normalize_document(isset($identity['cpf']) ? (string) $identity['cpf'] : '');
     if (strlen($cpf) !== 11) {
         respond(404, array('ok' => false, 'error' => 'identity_not_linked'));
@@ -143,17 +99,6 @@ function resolve_student(mysqli $db, array $identity): array
         respond(409, array('ok' => false, 'error' => 'ambiguous_identity'));
     }
     $student = $matches[0];
-    execute_statement(
-        $db,
-        "INSERT INTO dkweb_ouro_links
-           (ouro_subject_hash, id_aluno, codigo_escola, match_method, last_seen_at)
-         VALUES (?, ?, ?, 'cpf_verified', NOW())
-         ON DUPLICATE KEY UPDATE
-           id_aluno = VALUES(id_aluno), codigo_escola = VALUES(codigo_escola),
-           match_method = VALUES(match_method), last_seen_at = NOW()",
-        'sis',
-        array($subjectHash, (int) $student['id_aluno'], (string) $student['codigo_escola'])
-    );
     $student['match_method'] = 'cpf_verified';
     return $student;
 }
@@ -304,7 +249,6 @@ if ($db->connect_errno) {
 $db->set_charset('utf8');
 
 try {
-    ensure_link_table($db);
     $student = resolve_student($db, $body['identity']);
     $result = student_summary($db, $student);
     $db->close();
