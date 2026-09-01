@@ -1,6 +1,6 @@
 # Integração Ouro Moderno + DKWeb
 
-Recupera os dados históricos preservados no MySQL DKWeb usando o mesmo login da Ouro Moderno.
+Integra os dados presenciais preservados no MySQL DKOnline/DKWeb ao mesmo dashboard EAD, usando um único login da Ouro Moderno.
 
 ## Arquitetura
 
@@ -8,10 +8,10 @@ Recupera os dados históricos preservados no MySQL DKWeb usando o mesmo login da
 2. O frontend envia o token já existente ao `portal-gateway?service=dkweb`.
 3. `dkweb-student-portal` valida o token por uma RPC restrita a `service_role` e consulta a identidade atual diretamente na Ouro.
 4. A função envia somente o identificador Ouro e o CPF ao bridge KingHost, entre servidores e com HMAC-SHA256.
-5. O bridge associa Ouro e DKWeb por CPF apenas na primeira vez e grava somente o hash do identificador Ouro.
-6. As consultas seguintes usam o vínculo persistido e devolvem apenas dados do próprio aluno.
+5. O bridge procura um único cadastro presencial com o mesmo CPF e executa consultas somente de leitura.
+6. O dashboard combina automaticamente EAD e presencial nas telas Visão geral, Meus cursos, Aulas e notas, Turma e horário e Financeiro.
 
-O navegador nunca recebe senha MySQL, CPF, RG, endereço ou credenciais internas. O CPF não é armazenado no Supabase nem na tabela de vínculo.
+O navegador nunca recebe senha MySQL, CPF, RG, endereço ou credenciais internas. O CPF não é armazenado pelo conector e nenhuma tabela é criada ou modificada no MySQL legado.
 
 ## Conteúdo
 
@@ -20,7 +20,7 @@ O navegador nunca recebe senha MySQL, CPF, RG, endereço ou credenciais internas
 - `supabase/functions/dkweb-student-portal/`: validação da sessão Ouro e proxy seguro.
 - `supabase/functions/portal-gateway/`: gateway atual acrescido do serviço `dkweb`.
 - `supabase/migrations/`: RPC interna que resolve a identidade Ouro sem expor CPF ao navegador.
-- `frontend/`: painel responsivo sem framework e sem HTML inseguro.
+- O frontend final fica diretamente em `assets/js/v360` no pacote V5.5 do Portal; não existe componente, rota ou aba DKWeb separada.
 
 ## Implantação segura
 
@@ -50,31 +50,14 @@ Depois implante a versão atualizada de `portal-gateway`.
 
 ### 3. Frontend
 
-Carregue:
-
-```html
-<link rel="stylesheet" href="/assets/css/dkweb-panel.css">
-<script src="/assets/js/dkweb-panel.js"></script>
-```
-
-Após o login Ouro já ter produzido o token da sessão:
-
-```js
-LiveConnectDKWeb.mount({
-  target: "#dkwebHistory",
-  token: ouroSessionToken,
-  gatewayUrl: CONFIG.apiBase + "/portal-gateway"
-});
-```
-
-No pacote derivado V5.4, a integração já foi encaixada diretamente em `assets/js/v360/api.js`, `config.js` e `pages.js`: o menu **Histórico DKWeb** reutiliza `lc_student_session_v3`, carrega o histórico somente quando solicitado e preserva todas as correções da V5.3. Os arquivos independentes desta pasta permanecem como componente de referência/fallback.
+No pacote V5.5, `assets/js/v360/api.js` consulta EAD e presencial automaticamente depois do login. `pages.js` apresenta os dados por modalidade no mesmo dashboard, sem segundo login, nova aba ou menu "Histórico DKWeb".
 
 ## Compatibilidade e segurança
 
-- PHP 7.3 ou superior com `mysqli` e `mysqlnd`.
+- PHP 7.3 ou superior com `mysqli`; não depende de `mysqlnd`.
 - MySQL 5.5 preservado; a conexão solicita conversão para UTF-8.
 - Consultas preparadas e limitadas.
-- Vínculo automático somente com CPF único.
+- Consulta automática somente com CPF único e correspondência exata.
 - CPF ausente ou duplicado exige associação manual futura pela Secretaria.
 - Configuração privada protegida por `App_Data` e `web.config`.
 - Requisições com HMAC e validade de 120 segundos.
