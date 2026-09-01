@@ -1,0 +1,17 @@
+LIVE CONNECT PORTAL V5.5
+========================
+
+- Mantem integralmente as correcoes visuais e responsivas da V5.3.
+- Integra automaticamente EAD e presencial na Area do Aluno atual.
+- Usa a mesma sessao e as mesmas credenciais da Ouro Moderno.
+- Consulta o presencial por CPF unico, somente entre servidores e sem alterar o MySQL.
+- Nao envia CPF, RG, endereco ou credenciais MySQL ao navegador.
+- Exibe cursos, modulos, notas, frequencia e financeiro presencial nas telas existentes.
+- Remove a aba separada Historico DKWeb e preserva um unico dashboard.
+- Inclui estado seguro para CPF ausente, nao localizado ou duplicado.
+- A API KingHost aceita somente POST assinado e usa consultas preparadas.
+
+Dependencias de ativacao:
+- www/App_Data/dkweb-config.php preenchido apenas no servidor;
+- DKWEB_BRIDGE_URL e DKWEB_BRIDGE_SECRET no Supabase;
+- Edge Function dkweb-student-portal e portal-gateway atualizados.
