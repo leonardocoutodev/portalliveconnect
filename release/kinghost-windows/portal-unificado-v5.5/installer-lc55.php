@@ -131,4 +131,3 @@ try {
 
 @unlink(__FILE__);
 page('Atualização instalada', 'A V5.5 foi publicada com sucesso. O backup foi preservado na pasta ' . $backupRelative . ' e este instalador foi removido automaticamente.');
-b6f6c5b9f5719cc03f7cde3fad40997de964eb6213310d4beb1f44d4d66a5558  dkweb-integration/kinghost/installer-lc55.php
