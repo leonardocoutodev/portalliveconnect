@@ -74,7 +74,7 @@ Deno.serve(async(req:Request)=>{
     if(age===null||age<10||age>40)return reply(req,{ok:false,error:'invalid_birth_date'},400)
     if(!schoolStatuses.has(schoolStatus))return reply(req,{ok:false,error:'invalid_school_status'},400)
     if(!shifts.has(availableShift))return reply(req,{ok:false,error:'invalid_available_shift'},400)
-    if(!selectedClasses.has(selectedClass))return reply(req,{ok:false,error:'invalid_selected_class'},400)
+    if(selectedClass&&!selectedClasses.has(selectedClass))return reply(req,{ok:false,error:'invalid_selected_class'},400)
 
     const zipCode=digits(body.zip_code)
     const street=text(body.street,180)
@@ -194,8 +194,8 @@ Deno.serve(async(req:Request)=>{
       project:'jovem_aprendiz',
       school_status:schoolStatus,
       available_shift:availableShift,
-      selected_class:selectedClass,
-      selected_class_label:selectedClasses.get(selectedClass),
+      selected_class:selectedClass||null,
+      selected_class_label:selectedClasses.get(selectedClass)||null,
       currently_studying:currentlyStudying,
       student:{
         full_name:fullName,
@@ -247,8 +247,8 @@ Deno.serve(async(req:Request)=>{
       currently_studying:currentlyStudying,
       school_status:schoolStatus,
       available_shift:availableShift,
-      selected_class:selectedClass,
-      selected_class_label:selectedClasses.get(selectedClass),
+      selected_class:selectedClass||null,
+      selected_class_label:selectedClasses.get(selectedClass)||null,
       project:'Projeto Jovem Aprendiz',
       submitted_at:submittedAt
     }
@@ -263,8 +263,8 @@ Deno.serve(async(req:Request)=>{
     const {error:activityError}=await supabase.from('lead_activities').insert({
       lead_id:leadId,
       activity_type:'inscricao_jovem_aprendiz_portal',
-      description:`Projeto Jovem Aprendiz — ficha recebida — turma: ${selectedClasses.get(selectedClass)}`,
-      metadata:{interest_id:interest.id,form_id:form.id,school_status:schoolStatus,available_shift:availableShift,selected_class:selectedClass,selected_class_label:selectedClasses.get(selectedClass)}
+      description:`Projeto Jovem Aprendiz — ficha recebida — turma: ${selectedClasses.get(selectedClass)||'a confirmar'}`,
+      metadata:{interest_id:interest.id,form_id:form.id,school_status:schoolStatus,available_shift:availableShift,selected_class:selectedClass||null,selected_class_label:selectedClasses.get(selectedClass)}
     })
     if(activityError)throw activityError
 
