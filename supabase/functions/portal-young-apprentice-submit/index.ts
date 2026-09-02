@@ -4,6 +4,7 @@ const PORTAL_ORIGIN='https://portallc.netlify.app'
 const allowedOrigins=new Set([PORTAL_ORIGIN,'https://liveconnect.com.br','https://www.liveconnect.com.br'])
 const schoolStatuses=new Set(['fundamental','medio','medio_concluido','nao_estuda'])
 const shifts=new Set(['manha','tarde','noite','indiferente'])
+const selectedClasses=new Map([['terca_0900_1000','Terça-feira • 09:00 às 10:00'],['quinta_1400_1500','Quinta-feira • 14:00 às 15:00']])
 
 function originAllowed(origin:string){
   return !origin||allowedOrigins.has(origin)||origin.startsWith('http://localhost:')||origin.startsWith('http://127.0.0.1:')||/^https:\/\/[a-z0-9-]+--portallc\.netlify\.app$/i.test(origin)
@@ -66,12 +67,14 @@ Deno.serve(async(req:Request)=>{
     const age=calcAge(birthDate)
     const schoolStatus=text(body.school_status,40)
     const availableShift=text(body.available_shift,30)
+    const selectedClass=text(body.selected_class,40)
 
     if(fullName.split(/\s+/).length<2)return reply(req,{ok:false,error:'invalid_name'},400)
     if(rawPhone.length<10||rawPhone.length>13)return reply(req,{ok:false,error:'invalid_whatsapp'},400)
     if(age===null||age<10||age>40)return reply(req,{ok:false,error:'invalid_birth_date'},400)
     if(!schoolStatuses.has(schoolStatus))return reply(req,{ok:false,error:'invalid_school_status'},400)
     if(!shifts.has(availableShift))return reply(req,{ok:false,error:'invalid_available_shift'},400)
+    if(!selectedClasses.has(selectedClass))return reply(req,{ok:false,error:'invalid_selected_class'},400)
 
     const zipCode=digits(body.zip_code)
     const street=text(body.street,180)
@@ -191,6 +194,8 @@ Deno.serve(async(req:Request)=>{
       project:'jovem_aprendiz',
       school_status:schoolStatus,
       available_shift:availableShift,
+      selected_class:selectedClass,
+      selected_class_label:selectedClasses.get(selectedClass),
       currently_studying:currentlyStudying,
       student:{
         full_name:fullName,
@@ -242,6 +247,8 @@ Deno.serve(async(req:Request)=>{
       currently_studying:currentlyStudying,
       school_status:schoolStatus,
       available_shift:availableShift,
+      selected_class:selectedClass,
+      selected_class_label:selectedClasses.get(selectedClass),
       project:'Projeto Jovem Aprendiz',
       submitted_at:submittedAt
     }
@@ -256,8 +263,8 @@ Deno.serve(async(req:Request)=>{
     const {error:activityError}=await supabase.from('lead_activities').insert({
       lead_id:leadId,
       activity_type:'inscricao_jovem_aprendiz_portal',
-      description:`Projeto Jovem Aprendiz — ficha de inscrição recebida — turno: ${availableShift}`,
-      metadata:{interest_id:interest.id,form_id:form.id,school_status:schoolStatus,available_shift:availableShift}
+      description:`Projeto Jovem Aprendiz — ficha recebida — turma: ${selectedClasses.get(selectedClass)}`,
+      metadata:{interest_id:interest.id,form_id:form.id,school_status:schoolStatus,available_shift:availableShift,selected_class:selectedClass,selected_class_label:selectedClasses.get(selectedClass)}
     })
     if(activityError)throw activityError
 
