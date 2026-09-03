@@ -1,0 +1,66 @@
+ATIVACAO FINAL - PORTAL UNIFICADO EAD + PRESENCIAL
+==================================================
+
+O codigo do portal e os dois servicos do Supabase ja estao preparados.
+Faltam somente os passos privados abaixo, feitos nos paineis da KingHost e
+do Supabase. Nao envie senhas nem segredos por chat.
+
+1. BACKUP E PUBLICACAO NA KINGHOST
+---------------------------------
+- Faca um backup da pasta www atual.
+- Extraia o PATCH V5.5 dentro de www e permita substituir os arquivos.
+- Nao apague outras pastas do servidor.
+
+2. CONFIGURACAO PRIVADA DO MYSQL
+--------------------------------
+- Dentro de www/App_Data, copie:
+  dkweb-config.example.php
+  para:
+  dkweb-config.php
+- No arquivo novo, preencha db_password com a senha atual do MySQL.
+- Em bridge_secret, use um segredo aleatorio com pelo menos 32 caracteres.
+- Nao altere o arquivo example e nao publique o arquivo preenchido.
+
+Para gerar um segredo no PowerShell do seu computador:
+((New-Guid).Guid.Replace('-','') + (New-Guid).Guid.Replace('-',''))
+
+3. SEGREDOS DO SUPABASE
+-----------------------
+- Abra o projeto Live Connect Comercial no painel do Supabase.
+- Entre em Edge Functions > Secrets.
+- Cadastre:
+  DKWEB_BRIDGE_URL = https://www.liveconnect.com.br/dkweb-api/
+  DKWEB_BRIDGE_SECRET = o mesmo bridge_secret do passo 2
+- Nao altere SUPABASE_URL nem SUPABASE_SERVICE_ROLE_KEY.
+
+4. TESTES SEM DADOS PESSOAIS
+----------------------------
+- Abra https://www.liveconnect.com.br/dkweb-api/
+- A resposta esperada e JSON com method_not_allowed (codigo HTTP 405).
+- Abra https://www.liveconnect.com.br/App_Data/dkweb-config.php
+- A resposta esperada e 403 ou 404. O conteudo nunca pode aparecer.
+
+5. TESTE DE UM ALUNO
+--------------------
+- Entre em /area-do-aluno/ com o usuario e a senha da Ouro Moderno.
+- O mesmo painel deve exibir automaticamente:
+  * cursos EAD, quando existirem;
+  * cursos presenciais do DKOnline;
+  * modulos, notas, frequencia, financeiro e situacao de certificado.
+- Nao existe nova aba DKWeb e nao existe segundo login.
+
+6. SE O PRESENCIAL NAO APARECER
+-------------------------------
+- Confirme se o aluno possui uma conta valida na Ouro Moderno.
+- Confira se o CPF na Ouro e no cadastro Alunos do DKOnline e exatamente o
+  mesmo. A integracao nao usa nome ou telefone para evitar mostrar dados de
+  uma pessoa para outra.
+- Se o CPF estiver ausente, divergente ou duplicado, corrija o cadastro e
+  clique em Atualizar no Envio de Dados DKWEB do DKOnline.
+
+SEGURANCA
+---------
+- A consulta ao MySQL e somente leitura.
+- A senha do MySQL fica apenas em App_Data no servidor.
+- O navegador nunca recebe CPF, senha do MySQL ou segredo da ponte.
+- O banco DKOnline nao recebe tabelas, vinculos ou alteracoes do portal.

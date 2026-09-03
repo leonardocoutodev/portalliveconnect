@@ -1,0 +1,48 @@
+LIVE CONNECT V5.5 - PORTAL UNIFICADO EAD + PRESENCIAL
+===================================================
+
+O pacote preserva o Portal V5.3 e acrescenta:
+- login unico pela Ouro Moderno;
+- consulta segura e somente leitura ao MySQL do DKOnline;
+- cursos, modulos, notas, frequencia e financeiro presencial;
+- exibicao automatica no dashboard atual, sem nova aba ou segundo login;
+- painel responsivo em celulares, tablets e computadores;
+- API PHP isolada, com consultas preparadas e assinatura HMAC.
+
+ANTES DE PUBLICAR
+-----------------
+1. NAO apague o conteudo atual da pasta www.
+2. Extraia este pacote por cima do www, permitindo substituir somente os
+   arquivos de Portal listados abaixo.
+3. Em www/App_Data, copie dkweb-config.example.php para dkweb-config.php.
+4. Edite somente estas duas linhas de dkweb-config.php:
+   db_password   = senha atual do banco MySQL liveconnect
+   bridge_secret = segredo aleatorio com 32 ou mais caracteres
+5. O mesmo bridge_secret devera ser cadastrado no Supabase como
+   DKWEB_BRIDGE_SECRET. Nao envie essas duas senhas por chat ou e-mail.
+
+ARQUIVOS DO PORTAL SUBSTITUIDOS
+-------------------------------
+area-do-aluno/index.htm
+area-do-aluno/index.html
+assets/js/v360/app.js
+assets/js/v360/api.js
+assets/js/v360/config.js
+assets/js/v360/pages.js
+
+ARQUIVOS E PASTAS NOVOS
+-----------------------
+assets/css/dkweb-panel.css
+dkweb-api/
+App_Data/
+
+TESTES RAPIDOS NA KINGHOST
+--------------------------
+- /App_Data/dkweb-config.php deve responder 403 ou 404.
+- GET /dkweb-api/ deve responder 405 em JSON.
+- POST /dkweb-api/ sem assinatura deve responder 401.
+
+IMPORTANTE
+----------
+O novo servico Supabase e o gateway presencial devem ser publicados somente depois
+de a ponte PHP estar configurada. Ate la, o portal atual continua funcionando.
