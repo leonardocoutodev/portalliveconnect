@@ -29,3 +29,13 @@ A migration e a Edge Function devem ser aplicadas somente no projeto **Live Conn
 - **Admin:** deploy manual no **Cloudflare**. O pacote `Live_Connect_ADMIN_V5.7.0_CHAT_INTERNO_CHATBOT_COMERCIAL.zip` deve ser publicado manualmente no Worker/hosting do Admin.
 - **Backend Supabase:** migrations e Edge Functions são aplicadas diretamente no projeto **Live Connect Comercial** quando a conexão correta estiver disponível.
 - **GitHub:** usado para versionamento e histórico. Commit no repositório não deve ser interpretado como deploy automático do Portal ou do Admin.
+
+
+## Validação final do backend
+
+- Migration de comunicação aplicada no Supabase **Live Connect Comercial**.
+- Edge Function `portal-commercial-chat` ativa em produção.
+- Correção aplicada para preservar o status e o score de leads já existentes; o chatbot não rebaixa matrícula confirmada para pré-inscrição.
+- Atendimento humano sincronizado: mensagens enviadas pelo Comercial no Admin podem ser consultadas pelo widget público.
+- Fluxos de teste removidos após a validação, sem manter leads ou conversas artificiais no banco.
+- Registros com `visibility_scope='master_only'` estão fora das listagens normais do frontend.
