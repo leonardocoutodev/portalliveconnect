@@ -21,3 +21,11 @@
 - Edge Function: `supabase/functions/portal-commercial-chat/index.ts`
 
 A migration e a Edge Function devem ser aplicadas somente no projeto **Live Connect Comercial**.
+
+
+## Regra de deploy
+
+- **Portal público:** deploy manual na **KingHost**. O pacote `Live_Connect_PORTAL_PATCH_V5.7.0_CHATBOT_COMERCIAL.zip` deve ser enviado manualmente para a hospedagem do portal.
+- **Admin:** deploy manual no **Cloudflare**. O pacote `Live_Connect_ADMIN_V5.7.0_CHAT_INTERNO_CHATBOT_COMERCIAL.zip` deve ser publicado manualmente no Worker/hosting do Admin.
+- **Backend Supabase:** migrations e Edge Functions são aplicadas diretamente no projeto **Live Connect Comercial** quando a conexão correta estiver disponível.
+- **GitHub:** usado para versionamento e histórico. Commit no repositório não deve ser interpretado como deploy automático do Portal ou do Admin.
