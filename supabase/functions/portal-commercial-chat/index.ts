@@ -35,20 +35,27 @@ async function append(sb:any,sessionId:string,sender_type:string,body:string,met
 }
 async function ensureLead(sb:any,s:any){
   if(!s.full_name||!s.whatsapp)return null
-  const phone=digits(s.whatsapp)
-  let {data:lead}=await sb.from('leads').select('id,lead_score').eq('whatsapp',phone).is('deleted_at',null).limit(1).maybeSingle()
+  const rawPhone=digits(s.whatsapp)
+  const phone=(rawPhone.length===10||rawPhone.length===11)?'55'+rawPhone:rawPhone
+  const candidates=[rawPhone,phone].filter((x,i,a)=>x&&a.indexOf(x)===i)
+  const inList=candidates.join(',')
+  const {data:rows,error:lookupError}=await sb.from('leads')
+    .select('id,lead_score,status,source')
+    .or(`whatsapp.in.(${inList}),whatsapp_normalized.in.(${inList})`)
+    .is('deleted_at',null).order('updated_at',{ascending:false}).limit(1)
+  if(lookupError)throw lookupError
+  const lead=rows?.[0]||null
   const payload:any={
     full_name:s.full_name,whatsapp:phone,age:s.age||null,professional_goal:s.objective||'Qualificação profissional',
-    source:'portal_chatbot',status:'pre_inscricao',lead_score:s.lead_score||35,
     landing_page:s.landing_page||null,referrer:s.referrer||null,utm_source:s.utm_source||null,utm_medium:s.utm_medium||null,
     utm_campaign:s.utm_campaign||null,utm_content:s.utm_content||null,updated_at:new Date().toISOString()
   }
   if(lead?.id){
-    await sb.from('leads').update(payload).eq('id',lead.id)
+    await sb.from('leads').update({...payload,lead_score:Math.max(Number(lead.lead_score||0),Number(s.lead_score||35))}).eq('id',lead.id)
     if(!s.lead_id)await sb.from('commercial_chat_sessions').update({lead_id:lead.id}).eq('id',s.id)
     return lead.id
   }
-  const {data,error}=await sb.from('leads').insert(payload).select('id').single()
+  const {data,error}=await sb.from('leads').insert({...payload,source:'portal_chatbot',status:'pre_inscricao',lead_score:s.lead_score||35}).select('id').single()
   if(error)throw error
   await sb.from('commercial_chat_sessions').update({lead_id:data.id}).eq('id',s.id)
   return data.id
@@ -109,11 +116,19 @@ Deno.serve(async(req:Request)=>{
       return reply(req,{ok:true,token:s.public_token,session_id:s.id,stage:'name',message:hello})
     }
     const token=text(body.token,80)
-    const message=text(body.message,2000)
-    if(!/^[0-9a-f-]{36}$/i.test(token)||!message)return reply(req,{ok:false,error:'invalid_request'},400)
+    if(!/^[0-9a-f-]{36}$/i.test(token))return reply(req,{ok:false,error:'invalid_request'},400)
     const {data:s,error}=await sb.from('commercial_chat_sessions').select('*').eq('public_token',token).maybeSingle()
     if(error)throw error
     if(!s)return reply(req,{ok:false,error:'session_not_found'},404)
+    if(action==='poll'){
+      const {data:staff,error:staffError}=await sb.from('commercial_chat_messages')
+        .select('id,body,created_at').eq('session_id',s.id).eq('sender_type','staff')
+        .order('created_at',{ascending:false}).limit(40)
+      if(staffError)throw staffError
+      return reply(req,{ok:true,token,status:s.status,handoff:!!s.assigned_to||s.status==='handoff',messages:[...(staff||[])].reverse()})
+    }
+    const message=text(body.message,2000)
+    if(!message)return reply(req,{ok:false,error:'invalid_request'},400)
     const cutoff=new Date(Date.now()-60000).toISOString()
     const {count}=await sb.from('commercial_chat_messages').select('id',{count:'exact',head:true}).eq('session_id',s.id).gte('created_at',cutoff)
     if((count||0)>24)return reply(req,{ok:false,error:'rate_limited'},429)
