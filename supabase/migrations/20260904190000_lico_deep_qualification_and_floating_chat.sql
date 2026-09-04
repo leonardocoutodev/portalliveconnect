@@ -49,7 +49,9 @@ begin
  order by x.created_at asc;
 end $$;
 
-drop function if exists public.school_commercial_chat_sessions(integer,text);\n\ncreate or replace function public.school_commercial_chat_sessions(p_limit integer default 120,p_status text default null)
+drop function if exists public.school_commercial_chat_sessions(integer,text);
+
+create or replace function public.school_commercial_chat_sessions(p_limit integer default 120,p_status text default null)
 returns table(
  session_id uuid,lead_id uuid,status text,stage text,full_name text,whatsapp text,age integer,
  student_name text,student_age integer,relationship text,studies boolean,study_shift text,works boolean,
