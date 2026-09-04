@@ -1,231 +1,51 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const allowed=new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
-const cors=(req:Request)=>{
-  const o=req.headers.get('origin')||''
-  const origin=(!o||allowed.has(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:'))?(o||'https://www.liveconnect.com.br'):'https://www.liveconnect.com.br'
-  return {'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':origin,'Vary':'Origin','Access-Control-Allow-Headers':'content-type, apikey, x-client-info','Access-Control-Allow-Methods':'POST, OPTIONS','Cache-Control':'no-store'}
-}
-const reply=(req:Request,body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors(req)})
-const text=(v:unknown,max=1000)=>String(v??'').trim().slice(0,max)
-const digits=(v:unknown)=>String(v??'').replace(/\D/g,'')
-const norm=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()
-const yes=(v:string)=>/\b(sim|quero|vamos|pode|matricul|fechar|agora|prosseguir|continuar)\b/i.test(v)
-const wantsHuman=(v:string)=>/\b(humano|atendente|consultor|vendedor|pessoa|equipe)\b/i.test(v)
-const slugify=(v:string)=>norm(v).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
-const jsonHeaders={'Content-Type':'application/json'}
+const ALLOWED=new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
+const DAY={1:'Segunda-feira',2:'Terça-feira',3:'Quarta-feira',4:'Quinta-feira',5:'Sexta-feira',6:'Sábado'}
+const cors=req=>{const o=req.headers.get('origin')||'';const ok=!o||ALLOWED.has(o)||o.startsWith('http://localhost:')||o.startsWith('http://127.0.0.1:');return {'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':ok&&o?o:'https://www.liveconnect.com.br','Vary':'Origin','Access-Control-Allow-Headers':'content-type, apikey, x-client-info','Access-Control-Allow-Methods':'POST, OPTIONS','Cache-Control':'no-store'}}
+const reply=(req,body,status=200)=>new Response(JSON.stringify(body),{status,headers:cors(req)})
+const text=(v,max=1000)=>String(v??'').trim().slice(0,max)
+const digits=v=>String(v??'').replace(/\D/g,'')
+const norm=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim()
+const cleanName=v=>text(v,160).replace(/\s+/g,' ').trim()
+const invalidNames=new Set(['nome sobrenome','seu nome','sem nome','nao sei','não sei','teste teste','cliente cliente','visitante visitante','fulano de tal','asdf asdf','aaaa aaaa','meu nome'])
+function validName(v){const s=cleanName(v),n=norm(s),parts=s.split(' ').filter(Boolean);if(s.length<5||s.length>140||parts.length<2||invalidNames.has(n)||/\d/.test(s))return false;if(parts.some(p=>p.length<2||!/^[\p{L}][\p{L}'’\-]*$/u.test(p)))return false;if(new Set(parts.map(norm)).size===1)return false;return true}
+const validEmail=v=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(v,180).toLowerCase())
+const yes=v=>/^(sim|s|claro|com certeza|isso|pode|quero|vamos|consigo|funciona|ok|positivo)\b/.test(norm(v))
+const no=v=>/^(nao|não|n|negativo|nem|nao consigo|não consigo|nao funciona|não funciona)\b/.test(norm(v))
+const yesNo=v=>yes(v)?true:no(v)?false:null
+const wantsHuman=v=>/\b(humano|atendente|consultor|vendedor|pessoa|equipe|falar com alguem|falar com alguém)\b/.test(norm(v))
+const wantsPrice=v=>/\b(preco|preço|valor|matricula|matrícula|mensalidade|quanto custa|investimento)\b/.test(norm(v))
+const wantsAddress=v=>/\b(endereco|endereço|onde fica|localizacao|localização|local)\b/.test(norm(v))
+const slugify=v=>norm(v).replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
+function parseAge(v){const m=String(v).match(/\b(\d{1,3})\b/);const n=m?Number(m[1]):0;return n>=5&&n<=100?n:null}
+function parseRelationship(v){const n=norm(v);if(/\b(eu|mim|pra mim|para mim|proprio|próprio|propria|própria)\b/.test(n))return 'self';if(/\b(filho|filha)\b/.test(n))return 'filho';if(/\b(neto|neta)\b/.test(n))return 'neto';if(/\b(irmao|irmão|irma|irmã)\b/.test(n))return 'irmao';if(/\b(marido|esposa|companheiro|companheira|conjuge|cônjuge)\b/.test(n))return 'conjuge';if(/\b(sobrinho|sobrinha)\b/.test(n))return 'sobrinho';if(/\b(outro|outra|amigo|amiga|parente)\b/.test(n))return 'outro';const k=Number(n.replace(/\D/g,''));return ({1:'self',2:'filho',3:'neto',4:'irmao',5:'conjuge',6:'outro'})[k]||null}
+function relationshipLabel(v){return ({self:'a própria pessoa',filho:'filho(a)',neto:'neto(a)',irmao:'irmão/irmã',conjuge:'cônjuge',sobrinho:'sobrinho(a)',outro:'outra pessoa'})[v]||'outra pessoa'}
+function parseShift(v){const n=norm(v);if(/integral|dia todo/.test(n))return 'integral';if(/manha|manhã/.test(n))return 'manha';if(/tarde/.test(n))return 'tarde';if(/noite|noturno/.test(n))return 'noite';return null}
+function parseAvailability(v){const n=norm(v);if(/ead|online|casa/.test(n))return {period:'ead',raw:text(v,240)};if(/flex|qualquer|indiferente/.test(n))return {period:'flexivel',raw:text(v,240)};if(/noite|noturno/.test(n))return {period:'noite',raw:text(v,240)};if(/tarde/.test(n))return {period:'tarde',raw:text(v,240)};if(/manha|manhã/.test(n))return {period:'manha',raw:text(v,240)};const times=[...n.matchAll(/\b(\d{1,2})(?::(\d{2}))?\b/g)].map(m=>Number(m[1])+Number(m[2]||0)/60).filter(x=>x>=0&&x<24);if(times.length){const h=Math.min(...times);return {period:h>=17?'noite':h>=12?'tarde':'manha',raw:text(v,240)}}return null}
+function parseTimeline(v){const n=norm(v);if(/hoje|agora|imediat/.test(n))return 'hoje';if(/semana/.test(n))return 'esta_semana';if(/mes|mês|30 dias/.test(n))return 'este_mes';if(/pesquis|olhando|sem pressa|futuro/.test(n))return 'pesquisando';const k=Number(n.replace(/\D/g,''));return ({1:'hoje',2:'esta_semana',3:'este_mes',4:'pesquisando'})[k]||null}
+function timelineLabel(v){return ({hoje:'começar agora',esta_semana:'começar nesta semana',este_mes:'começar neste mês',pesquisando:'ainda está pesquisando'})[v]||v}
+function parseFactor(v){const n=norm(v);if(/preco|preço|valor|mensal|orcamento|orçamento/.test(n))return 'preco';if(/horario|horário|turno|tempo/.test(n))return 'horario';if(/duracao|duração|rapido|rápido/.test(n))return 'duracao';if(/emprego|trabalho|mercado|vaga|jovem aprendiz/.test(n))return 'empregabilidade';if(/conteudo|conteúdo|aula|grade|pratico|prático/.test(n))return 'conteudo';if(/certificado/.test(n))return 'certificado';const k=Number(n.replace(/\D/g,''));return ({1:'preco',2:'horario',3:'duracao',4:'empregabilidade',5:'conteudo',6:'certificado'})[k]||null}
+function factorLabel(v){return ({preco:'preço/condição',horario:'horário',duracao:'duração',empregabilidade:'empregabilidade',conteudo:'conteúdo',certificado:'certificado'})[v]||v}
+function scoreFor(stage){return ({name:0,whatsapp:12,contact_age:18,relationship:26,student_name:32,student_age:38,guardian_contact:42,guardian_name:45,guardian_whatsapp:48,studies:52,school_level:56,study_shift:60,works:64,occupation:68,work_schedule:72,ever_worked:68,previous_experience:72,availability:76,night_confirm:80,objective:84,timeline:88,decision_factor:92,decision_authority:94,course:96,email:98,closing:99,enrollment:100})[stage]||0}
+function objectivePrompt(s){const age=Number(s.student_age||s.age||0);if(age<14)return 'Pensando nessa idade, qual é o objetivo principal: desenvolver informática/tecnologia, criatividade, inglês, aprender algo novo ou se preparar desde cedo para o futuro?';if(age<=18){if(s.works||s.ever_worked)return 'Qual é o principal objetivo agora: conseguir uma oportunidade melhor, preparar o currículo, aprender uma habilidade específica, descobrir uma área profissional ou mudar de área com base na experiência que já teve?';return 'Como ainda está no início da vida profissional, qual é o principal objetivo: conseguir o primeiro emprego, preparar o currículo, descobrir uma área profissional, aprender uma habilidade específica ou se destacar para o Jovem Aprendiz?'}if(s.works)return 'Qual é o objetivo profissional principal: crescer na área atual, conseguir emprego melhor, mudar de área, aumentar a renda, empreender ou aprender uma habilidade específica?';if(s.ever_worked)return 'Qual é o objetivo principal: voltar ao mercado, conseguir emprego melhor, mudar de área, atualizar o currículo, empreender ou aprender uma habilidade específica?';return 'Qual é o objetivo principal: conseguir o primeiro emprego, construir um currículo mais forte, aprender uma profissão, empreender ou desenvolver uma habilidade específica?'}
+function decisionPrompt(s){const age=Number(s.student_age||s.age||0);if(age<=18&&!s.works&&!s.ever_worked)return 'Na escolha da formação, o que mais importa: 1 Aprendizado prático • 2 Horário • 3 Preparação para emprego/Jovem Aprendiz • 4 Duração • 5 Certificado • 6 Preço?';return 'O que mais pesa na decisão: 1 Preço • 2 Horário • 3 Duração • 4 Empregabilidade • 5 Conteúdo • 6 Certificado?'}
+async function currentOffer(sb){const today=new Date().toISOString().slice(0,10);const {data}=await sb.from('campaigns').select('name,title,offer_text,enrollment_fee,monthly_fee,cta_label,start_date,end_date,priority').eq('active',true).eq('highlight_public',true).order('priority',{ascending:false}).limit(30);return (data||[]).find(x=>(!x.start_date||String(x.start_date)<=today)&&(!x.end_date||String(x.end_date)>=today))||null}
+function offerText(o){if(!o)return '';if(o.offer_text)return String(o.offer_text);const br=n=>Number(n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});if(o.enrollment_fee!=null&&o.monthly_fee!=null)return `Condição vigente: matrícula ${br(o.enrollment_fee)} + mensalidades de ${br(o.monthly_fee)}.`;return o.title||''}
+async function append(sb,sessionId,sender_type,body,metadata={}){const {error}=await sb.from('commercial_chat_messages').insert({session_id:sessionId,sender_type,body,metadata});if(error)throw error;await sb.from('commercial_chat_sessions').update({last_message_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',sessionId)}
+async function patchSession(sb,id,patch){patch.updated_at=new Date().toISOString();const {error}=await sb.from('commercial_chat_sessions').update(patch).eq('id',id);if(error)throw error;return patch}
+function qmeta(s){return {contact_name:s.full_name,contact_age:s.age,relationship:s.relationship,student_name:s.student_name||s.full_name,student_age:s.student_age||s.age,guardian_required:s.guardian_required,guardian_is_contact:s.guardian_is_contact,guardian_name:s.guardian_name,guardian_whatsapp:s.guardian_whatsapp,studies:s.studies,school_level:s.school_level,study_shift:s.study_shift,works:s.works,ever_worked:s.ever_worked,current_occupation:s.current_occupation,previous_experience:s.metadata?.previous_experience||null,work_schedule:s.work_schedule,availability:s.availability,availability_period:s.availability_period,night_slot_confirmed:s.night_slot_confirmed,objective:s.objective,start_timeline:s.start_timeline,decision_factor:s.decision_factor,decision_authority:s.decision_authority,email:s.email,course_interest:s.course_interest,preferred_schedule:s.preferred_schedule,lead_score:s.lead_score}}
+async function ensureLead(sb,s){if(!s.student_name||!s.whatsapp)return null;const raw=digits(s.whatsapp),phone=(raw.length===10||raw.length===11)?'55'+raw:raw,candidates=[raw,phone].filter((x,i,a)=>x&&a.indexOf(x)===i),inList=candidates.join(',');const {data:rows,error:le}=await sb.from('leads').select('id,lead_score,status,source').or(`whatsapp.in.(${inList}),whatsapp_normalized.in.(${inList})`).is('deleted_at',null).order('updated_at',{ascending:false}).limit(1);if(le)throw le;const lead=rows?.[0]||null,studentAge=Number(s.student_age||0);const payload={full_name:s.student_name,whatsapp:phone,age:studentAge||null,email:s.email||null,professional_goal:s.objective||'Qualificação profissional',currently_working:typeof s.works==='boolean'?s.works:null,currently_studying:typeof s.studies==='boolean'?s.studies:null,guardian_name:studentAge<18?(s.guardian_name||null):null,guardian_whatsapp:studentAge<18?(s.guardian_whatsapp||null):null,landing_page:s.landing_page||null,referrer:s.referrer||null,utm_source:s.utm_source||null,utm_medium:s.utm_medium||null,utm_campaign:s.utm_campaign||null,utm_content:s.utm_content||null,updated_at:new Date().toISOString()};if(lead?.id){const {error}=await sb.from('leads').update({...payload,lead_score:Math.max(Number(lead.lead_score||0),Number(s.lead_score||35))}).eq('id',lead.id);if(error)throw error;if(!s.lead_id)await sb.from('commercial_chat_sessions').update({lead_id:lead.id}).eq('id',s.id);return lead.id}const {data,error}=await sb.from('leads').insert({...payload,source:'portal_chatbot',status:'pre_inscricao',lead_score:s.lead_score||35}).select('id').single();if(error)throw error;await sb.from('commercial_chat_sessions').update({lead_id:data.id}).eq('id',s.id);return data.id}
+async function saveInterest(sb,s,course){const leadId=s.lead_id||await ensureLead(sb,s);if(!leadId)return;const kind=String(course.type)==='gratuito'?'curso_gratuito':'curso_pago',meta={chat_session_id:s.id,...qmeta(s)};const {data:recent}=await sb.from('lead_interests').select('id').eq('lead_id',leadId).eq('course_id',course.id).eq('source','portal_chatbot').order('created_at',{ascending:false}).limit(1);if(!recent?.length)await sb.from('lead_interests').insert({lead_id:leadId,course_id:course.id,interest_type:kind,source:'portal_chatbot',metadata:meta});await sb.from('lead_activities').insert({lead_id:leadId,activity_type:'lico_lead_qualificado',description:`Lico — lead qualificado para ${course.name}`,metadata:{chat_session_id:s.id,course_id:course.id,course_name:course.name,...qmeta(s)}})}
+function periodFits(start,period,weekday){const h=Number(String(start||'00:00').slice(0,2));if(period==='noite')return Number(weekday)===3&&h===18;if(period==='manha')return h<12;if(period==='tarde')return h>=12&&h<17;if(period==='flexivel'||period==='ead')return true;return true}
+async function classesFor(sb,courseId,period){if(period==='ead')return [];const {data}=await sb.from('class_capacity_summary').select('id,course_id,weekday,start_time,end_time,remaining_seats,status,source_hidden,secretary_label').eq('course_id',courseId).eq('status','aberta').eq('source_hidden',false).gt('remaining_seats',0).order('weekday').order('start_time');return (data||[]).filter(c=>periodFits(c.start_time,period,Number(c.weekday)))}
+function classLabel(c){return `${DAY[Number(c.weekday)]||'Dia'} • ${String(c.start_time).slice(0,5)} às ${String(c.end_time).slice(0,5)}`}
+async function rankCourses(sb,courses,goal,s){const words=norm(goal).split(/\s+/).filter(x=>x.length>=4),studentAge=Number(s.student_age||0);const {data:classes}=await sb.from('class_capacity_summary').select('course_id,weekday,start_time,status,remaining_seats,source_hidden').eq('status','aberta').eq('source_hidden',false).gt('remaining_seats',0).limit(600);const map=new Map;for(const c of classes||[]){const a=map.get(c.course_id)||[];a.push(c);map.set(c.course_id,a)}return [...courses].map(c=>{const n=norm(c.name);let score=0;for(const w of words)if(n.includes(w))score+=3;if(/admin|empresa|gestao|gestão|escritorio|escritório|contab|finance/.test(norm(goal))&&/admin|gestao|escritorio|contab|finance/.test(n))score+=7;if(/informat|comput|excel|office|program|tecnolog|app|web|games/.test(norm(goal))&&/informat|excel|office|program|app|web|games|comput/.test(n))score+=7;if(/saude|saúde|farmac/.test(norm(goal))&&/saude|farmac/.test(n))score+=7;if(/design|social|marketing|midia|mídia/.test(norm(goal))&&/design|social|marketing|youtuber|trafego/.test(n))score+=7;if(/ingles|inglês|idioma/.test(norm(goal))&&/ingles/.test(n))score+=7;if(/beleza/.test(norm(goal))&&/beleza/.test(n))score+=7;if(studentAge<=13&&/kids/.test(n))score+=10;if(studentAge>13&&/kids/.test(n))score-=12;const cls=map.get(c.id)||[];if(s.availability_period==='ead'||cls.some(x=>periodFits(x.start_time,s.availability_period,Number(x.weekday))))score+=9;return {c,score}}).sort((a,b)=>b.score-a.score||String(a.c.name).localeCompare(String(b.c.name),'pt-BR')).slice(0,5).map(x=>x.c)}
+function qualificationSummary(s){const who=s.relationship&&s.relationship!=='self'?`Curso para ${relationshipLabel(s.relationship)}`:'Curso para a própria pessoa',study=s.studies?`Estuda${s.school_level?` (${s.school_level})`:''}${s.study_shift?` • turno ${s.study_shift}`:''}`:'Não estuda atualmente',work=s.works?`Trabalha${s.current_occupation?` • ${s.current_occupation}`:''}${s.work_schedule?` • ${s.work_schedule}`:''}`:(s.ever_worked?`Não trabalha atualmente • já teve experiência${s.metadata?.previous_experience?` em ${s.metadata.previous_experience}`:''}`:'Sem experiência profissional informada'),av=s.availability_period==='noite'?'Noite • quarta-feira, 18:00 às 20:00':(s.availability||s.availability_period||'a confirmar'),guardian=Number(s.student_age||0)<18?`\n• Responsável legal: ${s.guardian_name||'a confirmar'}${s.guardian_whatsapp?` • ${s.guardian_whatsapp}`:''}`:'';return `Perfil qualificado:\n• ${s.student_name||s.full_name} • ${s.student_age||s.age} anos • ${who}\n• ${study}\n• ${work}\n• Disponibilidade: ${av}${guardian}\n• Objetivo: ${s.objective||'—'}\n• Prazo: ${timelineLabel(s.start_timeline||'—')}\n• Prioridade: ${factorLabel(s.decision_factor||'—')}\n• Curso: ${s.course_interest||'—'}${s.preferred_schedule?`\n• Turma compatível: ${s.preferred_schedule}`:''}`}
+function nextAfterStudies(s){const age=Number(s.student_age||0);if(s.studies&&age<=18)return 'school_level';if(s.studies)return 'study_shift';if(age<14)return 'availability';return 'works'}
+function nextAfterStudy(s){const age=Number(s.student_age||0);return age<14?'availability':'works'}
+function nextAfterWork(s){return s.works?'occupation':'ever_worked'}
+function nextAfterAvailability(s){return s.availability_period==='noite'?'night_confirm':'objective'}
+function prompt(stage,s){const student=s.student_name||'a pessoa que fará o curso',first=String(s.full_name||'').split(' ')[0]||'',age=Number(s.student_age||0);const m={whatsapp:`Obrigado, ${first}. Agora me informe seu WhatsApp com DDD.`,contact_age:'Qual é a sua idade?',relationship:'O curso é para você ou para outra pessoa? Responda: 1 Você • 2 Filho(a) • 3 Neto(a) • 4 Irmão/irmã • 5 Cônjuge • 6 Outra pessoa.',student_name:'Qual é o nome e sobrenome da pessoa que fará o curso?',student_age:`Qual é a idade de ${student}?`,guardian_contact:'Como a pessoa que fará o curso é menor de 18 anos, você é o responsável legal que participará da matrícula? Responda sim ou não.',guardian_name:'Qual é o nome e sobrenome do responsável legal que participará da matrícula?',guardian_whatsapp:'Qual é o WhatsApp com DDD do responsável legal?',studies:`${student} estuda atualmente? Responda sim ou não.`,school_level:'Em qual etapa escolar está: Ensino Fundamental, Ensino Médio, ensino concluído ou outra situação?',study_shift:'Em qual turno estuda: manhã, tarde, noite ou integral?',works:`${student} trabalha atualmente? Responda sim ou não.`,occupation:'Qual é a ocupação ou área de trabalho atual?',work_schedule:'Qual é o horário de trabalho? Ex.: segunda a sexta, 08:00 às 18:00.',ever_worked:`${student} já trabalhou alguma vez? Responda sim ou não.`,previous_experience:'Em qual área foi a experiência profissional mais recente?',availability:'Em qual período consegue estudar: manhã, tarde, noite, flexível ou EAD? Se tiver horário exato, pode informar.',night_confirm:'Para curso presencial à noite, a Live Connect trabalha somente na quarta-feira, das 18:00 às 20:00. Esse horário funciona?',objective:objectivePrompt(s),timeline:'Quando pretende começar? 1 Hoje/agora • 2 Nesta semana • 3 Neste mês • 4 Ainda estou pesquisando.',decision_factor:decisionPrompt(s),decision_authority:age<18?'O responsável legal está ciente e autoriza seguir para a matrícula? Responda sim ou não.':'A pessoa que fará o curso está ciente e de acordo em seguir para a matrícula? Responda sim ou não.',course:'Qual dessas formações mais interessa?',email:'Para adiantar a matrícula e o acesso ao curso, qual e-mail deve ser usado?',closing:'Quer iniciar a matrícula agora?'};return m[stage]||'Como posso continuar ajudando?'}
 
-async function currentOffer(sb:any){
-  const today=new Date().toISOString().slice(0,10)
-  const {data}=await sb.from('campaigns').select('name,title,offer_text,enrollment_fee,monthly_fee,cta_label,start_date,end_date,priority')
-    .eq('active',true).eq('highlight_public',true).lte('start_date',today).or(`end_date.is.null,end_date.gte.${today}`)
-    .order('priority',{ascending:false}).limit(1)
-  return data?.[0]||null
-}
-function offerText(o:any){
-  if(!o)return ''
-  if(o.offer_text)return String(o.offer_text)
-  const br=(n:any)=>Number(n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
-  if(o.enrollment_fee!=null&&o.monthly_fee!=null)return `Condição vigente: matrícula ${br(o.enrollment_fee)} + mensalidades de ${br(o.monthly_fee)}.`
-  return o.title||''
-}
-async function append(sb:any,sessionId:string,sender_type:string,body:string,metadata:any={}){
-  await sb.from('commercial_chat_messages').insert({session_id:sessionId,sender_type,body,metadata})
-  await sb.from('commercial_chat_sessions').update({last_message_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',sessionId)
-}
-async function ensureLead(sb:any,s:any){
-  if(!s.full_name||!s.whatsapp)return null
-  const rawPhone=digits(s.whatsapp)
-  const phone=(rawPhone.length===10||rawPhone.length===11)?'55'+rawPhone:rawPhone
-  const candidates=[rawPhone,phone].filter((x,i,a)=>x&&a.indexOf(x)===i)
-  const inList=candidates.join(',')
-  const {data:rows,error:lookupError}=await sb.from('leads')
-    .select('id,lead_score,status,source')
-    .or(`whatsapp.in.(${inList}),whatsapp_normalized.in.(${inList})`)
-    .is('deleted_at',null).order('updated_at',{ascending:false}).limit(1)
-  if(lookupError)throw lookupError
-  const lead=rows?.[0]||null
-  const payload:any={
-    full_name:s.full_name,whatsapp:phone,age:s.age||null,professional_goal:s.objective||'Qualificação profissional',
-    landing_page:s.landing_page||null,referrer:s.referrer||null,utm_source:s.utm_source||null,utm_medium:s.utm_medium||null,
-    utm_campaign:s.utm_campaign||null,utm_content:s.utm_content||null,updated_at:new Date().toISOString()
-  }
-  if(lead?.id){
-    await sb.from('leads').update({...payload,lead_score:Math.max(Number(lead.lead_score||0),Number(s.lead_score||35))}).eq('id',lead.id)
-    if(!s.lead_id)await sb.from('commercial_chat_sessions').update({lead_id:lead.id}).eq('id',s.id)
-    return lead.id
-  }
-  const {data,error}=await sb.from('leads').insert({...payload,source:'portal_chatbot',status:'pre_inscricao',lead_score:s.lead_score||35}).select('id').single()
-  if(error)throw error
-  await sb.from('commercial_chat_sessions').update({lead_id:data.id}).eq('id',s.id)
-  return data.id
-}
-async function saveInterest(sb:any,s:any,course:any){
-  const leadId=s.lead_id||await ensureLead(sb,s)
-  if(!leadId)return
-  const kind=String(course.type)==='gratuito'?'curso_gratuito':'curso_pago'
-  const {data:recent}=await sb.from('lead_interests').select('id').eq('lead_id',leadId).eq('course_id',course.id).eq('source','portal_chatbot').order('created_at',{ascending:false}).limit(1)
-  if(!recent?.length)await sb.from('lead_interests').insert({
-    lead_id:leadId,course_id:course.id,interest_type:kind,source:'portal_chatbot',
-    metadata:{chat_session_id:s.id,objective:s.objective,lead_score:80}
-  })
-  await sb.from('lead_activities').insert({
-    lead_id:leadId,activity_type:'chatbot_lead_qualificado',
-    description:`Chatbot Comercial — interesse em ${course.name}`,
-    metadata:{chat_session_id:s.id,course_id:course.id,course_name:course.name}
-  })
-}
-function rankCourses(courses:any[],goal:string){
-  const words=norm(goal).split(/\s+/).filter(x=>x.length>=4)
-  return [...courses].map(c=>{
-    const n=norm(c.name);let score=0
-    for(const w of words)if(n.includes(w))score+=3
-    if(/admin|empresa|gestao|escritorio|contab/.test(norm(goal))&&/admin|gestao|escritorio|contab|finance/.test(n))score+=4
-    if(/informat|comput|excel|office|program|tecnolog|app|web|games/.test(norm(goal))&&/informat|excel|office|program|app|web|games|comput/.test(n))score+=4
-    if(/saude|farmac/.test(norm(goal))&&/saude|farmac/.test(n))score+=4
-    if(/design|social|marketing|midia/.test(norm(goal))&&/design|social|marketing|youtuber/.test(n))score+=4
-    if(/ingles|idioma/.test(norm(goal))&&/ingles/.test(n))score+=4
-    if(/beleza/.test(norm(goal))&&/beleza/.test(n))score+=4
-    return {c,score}
-  }).sort((a,b)=>b.score-a.score||String(a.c.name).localeCompare(String(b.c.name),'pt-BR')).slice(0,5).map(x=>x.c)
-}
-
-Deno.serve(async(req:Request)=>{
-  if(req.method==='OPTIONS')return new Response('ok',{headers:cors(req)})
-  if(req.method!=='POST')return reply(req,{ok:false,error:'method_not_allowed'},405)
-  const o=req.headers.get('origin')||''
-  if(o&&!allowed.has(o)&&!o.startsWith('http://localhost:')&&!o.startsWith('http://127.0.0.1:'))return reply(req,{ok:false,error:'origin_not_allowed'},403)
-  try{
-    const body=await req.json()
-    if(text(body.website,100))return reply(req,{ok:true})
-    const url=Deno.env.get('SUPABASE_URL')!
-    const raw=Deno.env.get('SUPABASE_SECRET_KEYS')
-    const secret=raw?JSON.parse(raw)['default']:Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const sb=createClient(url,secret,{auth:{persistSession:false,autoRefreshToken:false}})
-    const action=text(body.action,30)||'message'
-    if(action==='start'){
-      const meta=body.context&&typeof body.context==='object'?body.context:{}
-      const {data:s,error}=await sb.from('commercial_chat_sessions').insert({
-        landing_page:text(meta.landing_page||body.landing_page,300)||null,referrer:text(meta.referrer||body.referrer,300)||null,
-        utm_source:text(meta.utm_source,120)||null,utm_medium:text(meta.utm_medium,120)||null,utm_campaign:text(meta.utm_campaign,120)||null,utm_content:text(meta.utm_content,120)||null,
-        course_interest:text(meta.course_name,180)||null,metadata:{course_slug:text(meta.course_slug,180)||null}
-      }).select('id,public_token,stage').single()
-      if(error)throw error
-      const hello='Olá! Sou o assistente comercial da Live Connect. Vou te ajudar a encontrar a melhor formação e, se fizer sentido, iniciar sua matrícula. Qual é o seu nome?'
-      await append(sb,s.id,'assistant',hello,{stage:'name'})
-      return reply(req,{ok:true,token:s.public_token,session_id:s.id,stage:'name',message:hello})
-    }
-    const token=text(body.token,80)
-    if(!/^[0-9a-f-]{36}$/i.test(token))return reply(req,{ok:false,error:'invalid_request'},400)
-    const {data:s,error}=await sb.from('commercial_chat_sessions').select('*').eq('public_token',token).maybeSingle()
-    if(error)throw error
-    if(!s)return reply(req,{ok:false,error:'session_not_found'},404)
-    if(action==='poll'){
-      const {data:staff,error:staffError}=await sb.from('commercial_chat_messages')
-        .select('id,body,created_at').eq('session_id',s.id).eq('sender_type','staff')
-        .order('created_at',{ascending:false}).limit(40)
-      if(staffError)throw staffError
-      return reply(req,{ok:true,token,status:s.status,handoff:!!s.assigned_to||s.status==='handoff',messages:[...(staff||[])].reverse()})
-    }
-    const message=text(body.message,2000)
-    if(!message)return reply(req,{ok:false,error:'invalid_request'},400)
-    const cutoff=new Date(Date.now()-60000).toISOString()
-    const {count}=await sb.from('commercial_chat_messages').select('id',{count:'exact',head:true}).eq('session_id',s.id).gte('created_at',cutoff)
-    if((count||0)>24)return reply(req,{ok:false,error:'rate_limited'},429)
-    await append(sb,s.id,'visitor',message)
-    if(s.assigned_to||s.status==='handoff'){
-      return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:'Recebi sua mensagem. Um consultor da Live Connect continuará o atendimento por aqui.'})
-    }
-    if(wantsHuman(message)){
-      await sb.from('commercial_chat_sessions').update({status:'handoff',stage:'handoff',updated_at:new Date().toISOString()}).eq('id',s.id)
-      const out='Perfeito. Vou encaminhar seu atendimento para um consultor da Live Connect. Você pode continuar escrevendo por aqui.'
-      await append(sb,s.id,'assistant',out,{handoff:true})
-      return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:out})
-    }
-    const offer=await currentOffer(sb)
-    const nmsg=norm(message)
-    if(/preco|valor|matricula|mensalidade|quanto custa/.test(nmsg)&&s.stage!=='name'&&s.stage!=='whatsapp'){
-      const out=offerText(offer)||'As condições variam conforme a formação. Vou usar apenas a oferta vigente no sistema quando você escolher o curso.'
-      await append(sb,s.id,'assistant',out,{kind:'pricing'})
-      return reply(req,{ok:true,token,stage:s.stage,message:out})
-    }
-    if(/endereco|onde fica|localizacao/.test(nmsg)){
-      const out='A Live Connect fica na Rua Sá Oliveira, 18, Ed. Empresarial Fraga Center, Sala 01, Centro, Ilhéus - BA.'
-      await append(sb,s.id,'assistant',out,{kind:'address'})
-      return reply(req,{ok:true,token,stage:s.stage,message:out})
-    }
-    let stage=s.stage||'name'
-    let out=''
-    if(stage==='name'){
-      if(message.length<2){out='Me diga seu nome para eu personalizar o atendimento.'}
-      else{
-        await sb.from('commercial_chat_sessions').update({full_name:message.slice(0,160),stage:'whatsapp',lead_score:15,updated_at:new Date().toISOString()}).eq('id',s.id)
-        out=`Prazer, ${message.split(/\s+/)[0]}! Qual é o seu WhatsApp com DDD? Vou usar somente para registrar seu atendimento e facilitar o fechamento.`
-        stage='whatsapp'
-      }
-    }else if(stage==='whatsapp'){
-      const phone=digits(message)
-      if(phone.length<10||phone.length>13)out='Não consegui validar o número. Envie seu WhatsApp com DDD, por exemplo: (73) 99999-9999.'
-      else{
-        const patch:any={whatsapp:phone,stage:'age',lead_score:35,updated_at:new Date().toISOString()}
-        await sb.from('commercial_chat_sessions').update(patch).eq('id',s.id)
-        const ss={...s,...patch};await ensureLead(sb,ss)
-        out='Ótimo. Qual é a sua idade?'
-        stage='age'
-      }
-    }else if(stage==='age'){
-      const m=message.match(/\b(\d{1,3})\b/);const age=m?Number(m[1]):0
-      if(age<10||age>100)out='Me informe sua idade em anos para eu indicar a formação e o fluxo correto.'
-      else{
-        const patch:any={age,stage:'objective',lead_score:50,updated_at:new Date().toISOString()}
-        await sb.from('commercial_chat_sessions').update(patch).eq('id',s.id)
-        const ss={...s,...patch};await ensureLead(sb,ss)
-        out='O que você busca agora: conseguir emprego, melhorar o currículo, mudar de área, empreender ou aprender uma habilidade específica?'
-        stage='objective'
-      }
-    }else if(stage==='objective'){
-      const {data:courses}=await sb.from('courses').select('id,name,type').eq('active',true).order('name').limit(120)
-      const picks=rankCourses(courses||[],message)
-      const patch:any={objective:message.slice(0,600),stage:'course',lead_score:65,metadata:{...(s.metadata||{}),suggested_courses:picks.map((c:any)=>c.name)},updated_at:new Date().toISOString()}
-      await sb.from('commercial_chat_sessions').update(patch).eq('id',s.id)
-      const list=picks.length?picks.map((c:any,i:number)=>`${i+1}. ${c.name}`).join('\n'):''
-      out=picks.length?`Pelo que você me contou, estas opções fazem mais sentido:\n\n${list}\n\nQual delas mais te interessa? Se preferir, diga a área que quer estudar.`:'Qual área mais te interessa: Administrativo, Informática/Tecnologia, Saúde, Design/Marketing, Idiomas ou Beleza?'
-      stage='course'
-    }else if(stage==='course'){
-      const {data:courses}=await sb.from('courses').select('id,name,type').eq('active',true).order('name').limit(150)
-      const nm=norm(message)
-      let course=(courses||[]).find((c:any)=>nm===norm(c.name)||nm.includes(norm(c.name))||norm(c.name).includes(nm))
-      if(!course){
-        const suggested=Array.isArray(s.metadata?.suggested_courses)?s.metadata.suggested_courses:[]
-        const idx=Number(message.trim())-1
-        if(Number.isInteger(idx)&&idx>=0&&idx<suggested.length)course=(courses||[]).find((c:any)=>c.name===suggested[idx])
-      }
-      if(!course){
-        out='Ainda não consegui identificar o curso. Escreva o nome da formação ou uma área, como “Administrativo”, “Informática”, “Saúde” ou “Design”.'
-      }else{
-        const patch:any={course_interest:course.name,course_type:String(course.type),stage:'closing',status:'qualified',lead_score:80,updated_at:new Date().toISOString()}
-        await sb.from('commercial_chat_sessions').update(patch).eq('id',s.id)
-        const ss={...s,...patch};await saveInterest(sb,ss,course)
-        const price=offerText(offer)
-        out=`${course.name} é uma boa opção para o seu objetivo. ${price?price+' ':''}Quer iniciar sua matrícula agora? Se preferir, também posso chamar um consultor.`
-        stage='closing'
-      }
-    }else if(stage==='closing'){
-      if(yes(message)){
-        const patch:any={status:'closing',lead_score:95,updated_at:new Date().toISOString()}
-        await sb.from('commercial_chat_sessions').update(patch).eq('id',s.id)
-        const ss={...s,...patch};const leadId=ss.lead_id||await ensureLead(sb,ss)
-        if(leadId)await sb.from('lead_activities').insert({lead_id:leadId,activity_type:'chatbot_fechamento_iniciado',description:`Chatbot Comercial — fechamento iniciado — ${s.course_interest||'curso'}`,metadata:{chat_session_id:s.id}})
-        const link=`https://www.liveconnect.com.br/cursos/${slugify(s.course_interest||'')}/?utm_source=chatbot&utm_medium=chat&utm_campaign=fechamento_chatbot&chat=${token}`
-        out='Perfeito. Seu atendimento já está qualificado. Abra a matrícula para preencher os dados finais e escolher a condição disponível. Se precisar, um consultor consegue assumir a conversa no Admin.'
-        await append(sb,s.id,'assistant',out,{cta_url:link,cta_label:'Iniciar matrícula',stage:'closing'})
-        return reply(req,{ok:true,token,stage:'closing',message:out,cta:{label:'Iniciar matrícula',url:link},qualified:true,lead_score:95})
-      }
-      out='Sem problema. O que está impedindo você de avançar agora: valor, horário, escolha do curso ou alguma dúvida sobre a formação?'
-    }else{
-      out='Posso continuar sua qualificação ou chamar um consultor. O que você prefere?'
-    }
-    await append(sb,s.id,'assistant',out,{stage})
-    return reply(req,{ok:true,token,stage,message:out,lead_score:s.lead_score||0})
-  }catch(err){console.error('portal-commercial-chat',err);return reply(req,{ok:false,error:'internal_error'},500)}
-})
+Deno.serve(async req=>{if(req.method==='OPTIONS')return new Response('ok',{headers:cors(req)});if(req.method!=='POST')return reply(req,{ok:false,error:'method_not_allowed'},405);const origin=req.headers.get('origin')||'';if(origin&&!ALLOWED.has(origin)&&!origin.startsWith('http://localhost:')&&!origin.startsWith('http://127.0.0.1:'))return reply(req,{ok:false,error:'origin_not_allowed'},403);try{const body=await req.json();if(text(body.website,100))return reply(req,{ok:true});const url=Deno.env.get('SUPABASE_URL'),raw=Deno.env.get('SUPABASE_SECRET_KEYS'),secret=raw?JSON.parse(raw).default:Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),sb=createClient(url,secret,{auth:{persistSession:false,autoRefreshToken:false}}),action=text(body.action,30)||'message';if(action==='start'){const meta=body.context&&typeof body.context==='object'?body.context:{};const {data:s,error}=await sb.from('commercial_chat_sessions').insert({landing_page:text(meta.landing_page||body.landing_page,300)||null,referrer:text(meta.referrer||body.referrer,300)||null,utm_source:text(meta.utm_source,120)||null,utm_medium:text(meta.utm_medium,120)||null,utm_campaign:text(meta.utm_campaign,120)||null,utm_content:text(meta.utm_content,120)||null,course_interest:text(meta.course_name,180)||null,metadata:{course_slug:text(meta.course_slug,180)||null,lico_version:'5.8.1'}}).select('id,public_token,stage').single();if(error)throw error;const hello='Olá! Eu sou o Lico, assistente da Live Connect. Vou entender seu perfil, indicar a formação mais adequada e acompanhar você até a matrícula. Para começar, preciso do seu nome e sobrenome.';await append(sb,s.id,'assistant',hello,{stage:'name',assistant:'Lico'});return reply(req,{ok:true,token:s.public_token,session_id:s.id,stage:'name',message:hello})}const token=text(body.token,80);if(!/^[0-9a-f-]{36}$/i.test(token))return reply(req,{ok:false,error:'invalid_request'},400);const {data:s,error}=await sb.from('commercial_chat_sessions').select('*').eq('public_token',token).maybeSingle();if(error)throw error;if(!s)return reply(req,{ok:false,error:'session_not_found'},404);if(action==='poll'){const {data:staff,error:se}=await sb.from('commercial_chat_messages').select('id,body,created_at').eq('session_id',s.id).eq('sender_type','staff').order('created_at',{ascending:false}).limit(40);if(se)throw se;return reply(req,{ok:true,token,status:s.status,handoff:!!s.assigned_to||s.status==='handoff',messages:[...(staff||[])].reverse()})}if(action==='prefill'){return reply(req,{ok:true,token,student_name:s.student_name||s.full_name,contact_name:s.full_name,whatsapp:s.whatsapp,email:s.email,student_age:s.student_age||s.age,relationship:s.relationship,guardian_name:s.guardian_name,guardian_whatsapp:s.guardian_whatsapp,preferred_class_id:s.preferred_class_id,preferred_schedule:s.preferred_schedule,course_interest:s.course_interest,qualified:!!s.qualification_completed_at||Number(s.lead_score)>=90})}const message=text(body.message,2000);if(!message)return reply(req,{ok:false,error:'invalid_request'},400);const cutoff=new Date(Date.now()-60000).toISOString(),{count}=await sb.from('commercial_chat_messages').select('id',{count:'exact',head:true}).eq('session_id',s.id).gte('created_at',cutoff);if((count||0)>32)return reply(req,{ok:false,error:'rate_limited'},429);await append(sb,s.id,'visitor',message);if(s.assigned_to||s.status==='handoff')return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:'Recebi sua mensagem. Um consultor da Live Connect continuará o atendimento por aqui.'});let stage=s.stage||'name';if(stage==='name'){if(!validName(message)){const attempts=Number(s.metadata?.name_attempts||0)+1;await patchSession(sb,s.id,{metadata:{...(s.metadata||{}),name_attempts:attempts}});const out=attempts===1?'Preciso do seu nome e sobrenome reais para registrar o atendimento. Por exemplo: “Maria Oliveira”. Qual é o seu nome completo?':'Ainda não consegui validar o nome. Para eu continuar, digite nome e sobrenome sem apelidos, números ou respostas genéricas.';await append(sb,s.id,'assistant',out,{stage:'name',validation:'invalid_name',assistant:'Lico'});return reply(req,{ok:true,token,stage:'name',message:out,blocked:true})}const patch={full_name:cleanName(message),stage:'whatsapp',lead_score:scoreFor('whatsapp'),metadata:{...(s.metadata||{}),name_attempts:Number(s.metadata?.name_attempts||0)}};await patchSession(sb,s.id,patch);const out=prompt('whatsapp',{...s,...patch});await append(sb,s.id,'assistant',out,{stage:'whatsapp',assistant:'Lico'});return reply(req,{ok:true,token,stage:'whatsapp',message:out,lead_score:patch.lead_score})}if(wantsHuman(message)){await patchSession(sb,s.id,{status:'handoff',stage:'handoff'});const out='Perfeito. Vou chamar o Comercial da Live Connect. Você pode continuar escrevendo por aqui.';await append(sb,s.id,'assistant',out,{handoff:true,assistant:'Lico'});return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:out})}if(wantsPrice(message)&&!['closing','enrollment'].includes(stage)){const offer=await currentOffer(sb),base=offerText(offer)||'A condição depende da formação escolhida. Primeiro vou terminar sua qualificação para não te passar uma opção inadequada.',out=`${base}\n\n${prompt(stage,s)}`;await append(sb,s.id,'assistant',out,{kind:'pricing',stage,assistant:'Lico'});return reply(req,{ok:true,token,stage,message:out})}if(wantsAddress(message)&&!['closing','enrollment'].includes(stage)){const out=`A Live Connect fica na Rua Sá Oliveira, 18, Ed. Empresarial Fraga Center, Sala 01, Centro, Ilhéus - BA.\n\n${prompt(stage,s)}`;await append(sb,s.id,'assistant',out,{kind:'address',stage,assistant:'Lico'});return reply(req,{ok:true,token,stage,message:out})}let patch={},out='',next=stage;if(stage==='whatsapp'){const raw=digits(message),phone=(raw.length===10||raw.length===11)?'55'+raw:raw;if(phone.length<12||phone.length>13)out='Não consegui validar o número. Envie o WhatsApp com DDD, por exemplo: (73) 99999-9999.';else{next='contact_age';patch={whatsapp:phone,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='contact_age'){const age=parseAge(message);if(age===null)out='Preciso da idade em anos para adaptar as perguntas. Ex.: 17 ou 32.';else{next='relationship';patch={age,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='relationship'){const rel=parseRelationship(message);if(!rel)out=prompt('relationship',s);else if(rel==='self'){const age=Number(s.age||0),minor=age<18;next=minor?'guardian_name':'studies';patch={relationship:rel,student_name:s.full_name,student_age:s.age,guardian_required:minor,guardian_is_contact:false,stage:next,lead_score:scoreFor(next)};out=minor?'Como você é menor de 18 anos, a matrícula precisa de um responsável legal. Qual é o nome e sobrenome do seu responsável?':prompt(next,{...s,...patch})}else{next='student_name';patch={relationship:rel,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='student_name'){if(!validName(message))out='Preciso do nome e sobrenome reais da pessoa que fará o curso para continuar.';else{next='student_age';patch={student_name:cleanName(message),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='student_age'){const age=parseAge(message);if(age===null)out='Informe a idade da pessoa que fará o curso em anos.';else if(age<18){next='guardian_contact';patch={student_age:age,guardian_required:true,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}else{next='studies';patch={student_age:age,guardian_required:false,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='guardian_contact'){const yn=yesNo(message);if(yn===null)out=prompt(stage,s);else if(yn){next='studies';patch={guardian_is_contact:true,guardian_name:s.full_name,guardian_whatsapp:s.whatsapp,decision_authority:true,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}else{next='guardian_name';patch={guardian_is_contact:false,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='guardian_name'){if(!validName(message))out='Preciso do nome e sobrenome válidos do responsável legal.';else{next='guardian_whatsapp';patch={guardian_name:cleanName(message),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='guardian_whatsapp'){const raw=digits(message),phone=(raw.length===10||raw.length===11)?'55'+raw:raw;if(phone.length<12||phone.length>13)out='Envie um WhatsApp válido do responsável, com DDD.';else{next='studies';patch={guardian_whatsapp:phone,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='studies'){const yn=yesNo(message);if(yn===null)out='Me responda apenas se estuda atualmente: sim ou não.';else{const tmp={...s,studies:yn},nxt=nextAfterStudies(tmp);next=nxt;patch={studies:yn,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='school_level'){if(message.length<3)out='Informe se está no Ensino Fundamental, Ensino Médio, concluído ou outra situação.';else{next='study_shift';patch={school_level:text(message,120),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='study_shift'){const sh=parseShift(message);if(!sh)out='Informe o turno de estudo: manhã, tarde, noite ou integral.';else{const tmp={...s,study_shift:sh},nxt=nextAfterStudy(tmp);next=nxt;patch={study_shift:sh,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='works'){const yn=yesNo(message);if(yn===null)out='Me responda se trabalha atualmente: sim ou não.';else{const tmp={...s,works:yn},nxt=nextAfterWork(tmp);next=nxt;patch={works:yn,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='occupation'){if(message.length<2)out='Qual é sua ocupação ou área de trabalho atual?';else{next='work_schedule';patch={current_occupation:text(message,180),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='work_schedule'){if(message.length<3)out='Informe o horário de trabalho para eu cruzar com as turmas disponíveis.';else{next='availability';patch={work_schedule:text(message,240),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='ever_worked'){const yn=yesNo(message);if(yn===null)out='Me responda se já trabalhou alguma vez: sim ou não.';else if(yn){next='previous_experience';patch={ever_worked:true,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}else{next='availability';patch={ever_worked:false,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='previous_experience'){if(message.length<2)out='Em qual área foi a experiência mais recente?';else{next='availability';patch={metadata:{...(s.metadata||{}),previous_experience:text(message,180)},stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='availability'){const av=parseAvailability(message);if(!av)out='Informe o período disponível: manhã, tarde, noite, flexível ou EAD.';else{const tmp={...s,availability:av.raw,availability_period:av.period},nxt=nextAfterAvailability(tmp);next=nxt;patch={availability:av.raw,availability_period:av.period,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='night_confirm'){const yn=yesNo(message);if(yn===null)out='Para presencial à noite, preciso confirmar: quarta-feira, 18:00 às 20:00 funciona? Responda sim ou não.';else if(yn){next='objective';patch={night_slot_confirmed:true,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}else{next='availability';patch={night_slot_confirmed:false,availability:null,availability_period:null,stage:next,lead_score:scoreFor(next),metadata:{...(s.metadata||{}),night_rejected:true}};out='Sem problema. O presencial noturno é somente quarta-feira, 18:00 às 20:00. Podemos avaliar manhã, tarde, um horário flexível ou EAD. Qual alternativa funciona melhor?'}}else if(stage==='objective'){if(message.length<4)out=objectivePrompt(s);else{next='timeline';patch={objective:text(message,600),stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='timeline'){const tl=parseTimeline(message);if(!tl)out=prompt('timeline',s);else{next='decision_factor';patch={start_timeline:tl,stage:next,lead_score:scoreFor(next)};out=prompt(next,{...s,...patch})}}else if(stage==='decision_factor'){const f=parseFactor(message);if(!f)out=decisionPrompt(s);else{const age=Number(s.student_age||0),needsAuthority=s.relationship!=='self'||age<18;next=needsAuthority?'decision_authority':'course';patch={decision_factor:f,decision_authority:needsAuthority?null:true,stage:next,lead_score:scoreFor(next)};if(next==='course'){const {data:courses}=await sb.from('courses').select('id,name,type').eq('active',true).order('name').limit(160),picks=await rankCourses(sb,courses||[],s.objective,{...s,...patch}),list=picks.map((c,i)=>`${i+1}. ${c.name}`).join('\n');patch.metadata={...(s.metadata||{}),suggested_courses:picks.map(c=>({id:c.id,name:c.name,type:c.type}))};out=list?`Com base no perfil, idade, objetivo e disponibilidade, estas opções fazem mais sentido:\n\n${list}\n\nQual delas mais interessa?`:'Não encontrei uma recomendação segura ainda. Me diga a área que você prefere.'}else out=prompt(next,{...s,...patch})}}else if(stage==='decision_authority'){const yn=yesNo(message);if(yn===null)out=prompt(stage,s);else if(!yn){next='handoff';patch={decision_authority:false,status:'handoff',stage:'handoff',lead_score:scoreFor('decision_authority')};out='Entendi. Como a decisão depende de outra pessoa, vou encaminhar para o Comercial orientar a melhor forma de continuar.'}else{next='course';const {data:courses}=await sb.from('courses').select('id,name,type').eq('active',true).order('name').limit(160),picks=await rankCourses(sb,courses||[],s.objective,{...s,decision_authority:true}),list=picks.map((c,i)=>`${i+1}. ${c.name}`).join('\n');patch={decision_authority:true,stage:next,lead_score:scoreFor(next),metadata:{...(s.metadata||{}),suggested_courses:picks.map(c=>({id:c.id,name:c.name,type:c.type}))}};out=list?`Ótimo. Pelo perfil de ${s.student_name||s.full_name}, estas formações são as mais compatíveis:\n\n${list}\n\nQual delas mais interessa?`:'Me diga a área que você quer considerar.'}}else if(stage==='course'){const suggested=Array.isArray(s.metadata?.suggested_courses)?s.metadata.suggested_courses:[],n=norm(message),idx=Number(message.trim())-1;let selected=Number.isInteger(idx)&&idx>=0&&idx<suggested.length?suggested[idx]:suggested.find(c=>n===norm(c.name)||n.includes(norm(c.name))||norm(c.name).includes(n));if(!selected){const {data:all}=await sb.from('courses').select('id,name,type').eq('active',true).limit(180);selected=(all||[]).find(c=>n===norm(c.name)||n.includes(norm(c.name))||norm(c.name).includes(n))}if(!selected)out='Ainda não consegui identificar a formação. Escolha pelo número da lista ou escreva o nome do curso.';else{const classes=await classesFor(sb,selected.id,s.availability_period),chosen=classes[0]||null;if(s.availability_period==='noite'&&!chosen){out=`Para presencial à noite, só trabalhamos na quarta-feira das 18:00 às 20:00, e não encontrei vaga compatível para ${selected.name} nessa janela agora. Escolha outra formação, outro período ou peça um consultor.`}else{next='email';patch={course_interest:selected.name,course_type:String(selected.type),preferred_class_id:chosen?.id||null,preferred_schedule:chosen?classLabel(chosen):null,status:'qualified',stage:next,lead_score:scoreFor(next)};out=`${selected.name} combina com o perfil informado.${chosen?` Encontrei uma turma compatível: ${classLabel(chosen)}.`:s.availability_period==='ead'?' Vou considerar a modalidade EAD no fechamento.':''}\n\n${prompt(next,{...s,...patch})}`}}}else if(stage==='email'){if(!validEmail(message))out='Preciso de um e-mail válido para adiantar o cadastro e o acesso ao curso. Ex.: nome@email.com.';else{const completed=new Date().toISOString(),patch0={email:text(message,180).toLowerCase(),qualification_completed_at:completed,status:'qualified',stage:'closing',lead_score:scoreFor('closing')};await patchSession(sb,s.id,patch0);const fresh={...s,...patch0},leadId=await ensureLead(sb,fresh);const {data:course}=await sb.from('courses').select('id,name,type').eq('active',true).ilike('name',s.course_interest||'').limit(1).maybeSingle();if(course)await saveInterest(sb,{...fresh,lead_id:leadId},course);const offer=await currentOffer(sb),price=offerText(offer);out=`${qualificationSummary(fresh)}\n\n${price?price+'\n\n':''}Está tudo qualificado. Quer iniciar a matrícula agora?`;await append(sb,s.id,'assistant',out,{stage:'closing',assistant:'Lico',qualification:qmeta(fresh)});return reply(req,{ok:true,token,stage:'closing',message:out,qualified:true,lead_score:patch0.lead_score})}}else if(stage==='closing'){if(yes(message)||/\b(matricul|fechar|prosseguir|continuar|agora)\b/.test(norm(message))){if(s.availability_period==='noite'&&!s.night_slot_confirmed){out='Antes da matrícula preciso confirmar o horário: presencial à noite é somente quarta-feira, 18:00 às 20:00. Esse horário funciona?';next='night_confirm';patch={stage:next}}else if(!s.course_interest||!s.email){out='Ainda falta uma informação obrigatória da qualificação. Vou retomar de onde paramos.';next=!s.course_interest?'course':'email';patch={stage:next}}else if(Number(s.student_age||0)<18&&(!s.guardian_name||!s.guardian_whatsapp)){out='Antes da matrícula de um menor, preciso confirmar o responsável legal. Vou retomar essa etapa.';next=!s.guardian_name?'guardian_name':'guardian_whatsapp';patch={stage:next}}else{patch={status:'closing',stage:'enrollment',lead_score:100};const leadId=s.lead_id||await ensureLead(sb,{...s,...patch});if(leadId)await sb.from('lead_activities').insert({lead_id:leadId,activity_type:'lico_fechamento_iniciado',description:`Lico — matrícula iniciada — ${s.course_interest}`,metadata:{chat_session_id:s.id,...qmeta(s)}});const link=`https://www.liveconnect.com.br/cursos/${slugify(s.course_interest)}/?utm_source=lico&utm_medium=chat&utm_campaign=matricula_lico&from_lico=1&chat=${token}`;out='Perfeito. Sua qualificação está concluída. Vou abrir a matrícula com os dados que já coletei; você só completa os documentos e confirma as preferências finais.';await patchSession(sb,s.id,patch);await append(sb,s.id,'assistant',out,{stage:'enrollment',assistant:'Lico',cta_url:link,cta_label:'Iniciar matrícula'});return reply(req,{ok:true,token,stage:'enrollment',message:out,cta:{label:'Iniciar matrícula',url:link},qualified:true,lead_score:100})}}else{const n=norm(message),offer=await currentOffer(sb);if(/preco|preço|valor|mensal/.test(n))out=`${offerText(offer)||'A condição depende da oferta vigente no sistema.'} Isso resolve sua dúvida para avançarmos com a matrícula?`;else if(/horario|horário|turno/.test(n))out=s.availability_period==='noite'?'Para presencial à noite, o horário é exclusivamente quarta-feira, 18:00 às 20:00. Esse horário funciona para você?':`Sua disponibilidade registrada é ${s.availability||s.availability_period}. Quer avançar com a matrícula?`;else if(/curso|duvida|dúvida|conteudo|conteúdo/.test(n))out=`Posso chamar o Comercial para detalhar ${s.course_interest||'a formação'}, ou podemos seguir para a matrícula. O que prefere?`;else out='Entendi. Para eu não forçar uma decisão, me diga o principal motivo que ainda impede a matrícula: valor, horário, curso, tempo ou necessidade de falar com outra pessoa.'}}else out=prompt(stage,s);if(Object.keys(patch).length)await patchSession(sb,s.id,patch);const current={...s,...patch};if(current.whatsapp&&current.student_name&&['studies','school_level','study_shift','works','occupation','work_schedule','ever_worked','previous_experience','availability','night_confirm','objective','timeline','decision_factor','decision_authority','course','email','closing'].includes(next))await ensureLead(sb,current).catch(()=>null);await append(sb,s.id,'assistant',out,{stage:next,assistant:'Lico'});return reply(req,{ok:true,token,stage:next,message:out,lead_score:Number(current.lead_score||0),handoff:next==='handoff'})}catch(err){console.error('portal-commercial-chat',err);return reply(req,{ok:false,error:'internal_error'},500)}})
