@@ -66,7 +66,8 @@ Deno.serve(async(req:Request)=>{
       if(p.id===senderId)continue
       const chatAllowed=p.role==='master_admin'||p.role==='coadmin'||pmap.get(p.id)?.can_manage_chat===true
       if(!chatAllowed)continue
-      if(channel.channel_type==='public'||p.role==='master_admin'||(channel.participant_roles||[]).includes(p.role))allowedUsers.add(p.id)
+      const chatRole=p.role==='master_admin'?'admin_comercial':p.role
+      if(channel.channel_type==='public'||(channel.participant_roles||[]).includes(chatRole))allowedUsers.add(p.id)
     }
     const sender=(profiles||[]).find((p:any)=>p.id===senderId)
     const payload=JSON.stringify({
