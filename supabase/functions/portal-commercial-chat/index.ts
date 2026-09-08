@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.1'
+const BOT_VERSION = 'liveconnect-basic-sales-1.2'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -134,12 +134,14 @@ function courseScore(course,message){
   if(q===n) score+=100
   if(n.includes(q)&&q.length>2) score+=40
   if(q.includes(n)&&n.length>2) score+=35
-  for(const w of q.split(' ').filter(x=>x.length>=4)){
-    if(n.includes(w)) score+=8
-    if(d.includes(w)) score+=2
+  const stop=new Set(['quero','curso','cursos','fazer','para','trabalhar','area','profissional','formacao','gratuito','gratuita','gratis','apenas','somente'])
+  const nt=new Set(n.split(' ')),dt=new Set(d.split(' '))
+  for(const w of q.split(' ').filter(x=>x.length>=4&&!stop.has(x))){
+    if(nt.has(w)) score+=8
+    if(dt.has(w)) score+=2
   }
   const groups=[
-    [/admin|empresa|gestao|escritorio|contab|finance/,/admin|gestao|escritorio|contab|finance/],
+    [/administrat|empresa|gestao|escritorio|contab|finance/,/administrat|gestao|escritorio|contab|finance/],
     [/informat|comput|excel|office|program|tecnolog|web|games/,/informat|excel|office|program|tecnolog|web|games|comput/],
     [/saude|farmac/,/saude|farmac/],
     [/marketing|social|midia|design|trafego/,/marketing|social|midia|design|trafego/],
@@ -148,6 +150,7 @@ function courseScore(course,message){
     [/vendas|atendimento|comercial/,/vendas|atendimento|comercial/]
   ]
   for(const pair of groups) if(pair[0].test(q)&&pair[1].test(n+' '+d)) score+=18
+  if(/administrat/.test(q)&&/auxiliar administrat/.test(n)) score+=14
   return score
 }
 async function matchCourse(sb,message,onlyFree=false){
