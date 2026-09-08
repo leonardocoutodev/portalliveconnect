@@ -16,7 +16,7 @@ const cors=(req:Request)=>{
 const reply=(req:Request,body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors(req)})
 const text=(v:unknown,max=200)=>String(v??'').trim().slice(0,max)
 const validEmail=(v:string)=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
-const roles=new Set(['coadmin','diretoria','admin_comercial','secretaria','readonly'])
+const roles=new Set(['coadmin','diretoria','admin_comercial','secretaria','instrutora','readonly'])
 const defaults=(role:string)=>{
   const masterLike=role==='coadmin'
   return {
