@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.3'
+const BOT_VERSION = 'liveconnect-basic-sales-1.4'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -370,7 +370,11 @@ Deno.serve(async req=>{
     }else if(stage==='availability'){
       const neg=negativeAvailability(message)
       const av=parseAvailability(message)
-      if(neg) out='Entendi que '+neg+' não funciona para você. Qual opção funciona melhor? '+(s.course_type==='gratuito'?'Os gratuitos são presenciais; pode ser manhã, tarde ou noite.':'Pode ser presencial de manhã, tarde ou noite, ou EAD.')
+      if(neg){
+        const freeOpts=['manhã','tarde','noite'].filter(x=>x!==neg)
+        const paidOpts=['manhã','tarde','noite'].filter(x=>x!==neg)
+        out='Entendi que '+neg+' não funciona para você. Qual opção funciona melhor? '+(s.course_type==='gratuito'?'Os gratuitos são presenciais; pode ser '+freeOpts.join(' ou ')+'.':'Pode ser presencial de '+paidOpts.join(', ').replace(/, ([^,]+)$/,' ou $1')+', ou EAD.')
+      }
       else if(!av) out=s.course_type==='gratuito'?'Só preciso entender seu período disponível para o presencial: manhã, tarde ou noite.':'Só preciso entender sua preferência: presencial ou EAD? Se presencial, qual período — manhã, tarde ou noite?'
       else{
         const {data:course}=await sb.from('courses').select('id,name,type,description,duration_months_1x_week,workload_hours').eq('active',true).eq('type',s.course_type||'pago').ilike('name',s.course_interest||'').limit(1).maybeSingle()
