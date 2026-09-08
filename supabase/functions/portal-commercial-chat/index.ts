@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.0'
+const BOT_VERSION = 'liveconnect-basic-sales-1.1'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -43,12 +43,28 @@ function parseName(v){
   return words.map(w=>w.charAt(0).toLocaleUpperCase('pt-BR')+w.slice(1).toLocaleLowerCase('pt-BR')).join(' ')
 }
 function parsePhone(v){
-  const raw=digits(v)
-  const p=(raw.length===10||raw.length===11)?'55'+raw:raw
-  return p.length>=12&&p.length<=13?p:null
+  let raw=digits(v)
+  if(raw.startsWith('55')&&(raw.length===12||raw.length===13)) raw=raw.slice(2)
+  if(raw.length!==10&&raw.length!==11) return null
+  const ddd=Number(raw.slice(0,2)),local=raw.slice(2)
+  if(ddd<11||ddd>99||/^0+$/.test(local)||/^(.)\1+$/.test(local)) return null
+  if(raw.length===11&&local[0]!=='9') return null
+  if(raw.length===10&&!/[2-5]/.test(local[0])) return null
+  return '55'+raw
+}
+function negativeAvailability(v){
+  const n=norm(v)
+  if(!/\b(nao|sem)\b/.test(n)) return null
+  if(/\bmanha\b/.test(n)) return 'manhã'
+  if(/\btarde\b/.test(n)) return 'tarde'
+  if(/\b(noite|noturno)\b/.test(n)) return 'noite'
+  if(/\b(ead|online|a distancia)\b/.test(n)) return 'EAD'
+  if(/\bpresencial\b/.test(n)) return 'presencial'
+  return null
 }
 function parseAvailability(v){
   const n=norm(v)
+  if(negativeAvailability(v)) return null
   let mode=null,period=null
   if(/\b(ead|online|a distancia)\b/.test(n)) mode='ead'
   if(/\b(presencial|na escola)\b/.test(n)) mode='presencial'
@@ -135,20 +151,27 @@ function courseScore(course,message){
   return score
 }
 async function matchCourse(sb,message,onlyFree=false){
-  const list=await getCourses(sb,onlyFree?'gratuito':null)
+  const list=await getCourses(sb,onlyFree?'gratuito':'pago')
   const ranked=list.map(c=>({c,s:courseScore(c,message)})).sort((a,b)=>b.s-a.s)
-  return ranked[0]&&ranked[0].s>=18?ranked[0].c:null
+  return ranked[0]&&ranked[0].s>=30?ranked[0].c:null
 }
 async function recommend(sb,message,onlyFree=false){
   const list=await getCourses(sb,onlyFree?'gratuito':'pago')
-  return list.map(c=>({c,s:courseScore(c,message)})).sort((a,b)=>b.s-a.s||String(a.c.name).localeCompare(String(b.c.name),'pt-BR')).slice(0,3).map(x=>x.c)
+  return list.map(c=>({c,s:courseScore(c,message)}))
+    .filter(x=>x.s>0)
+    .sort((a,b)=>b.s-a.s||String(a.c.name).localeCompare(String(b.c.name),'pt-BR'))
+    .slice(0,3).map(x=>x.c)
+}
+function safeDescription(c){
+  const d=String(c.description||'').replace(/\s+/g,' ').trim()
+  if(!d||/curso presente no cat[aá]logo de cursos live connect 2026/i.test(d)) return 'Formação profissional voltada ao desenvolvimento de habilidades práticas para o mercado de trabalho.'
+  return d
 }
 function courseList(list){
-  return list.map((c,i)=>(i+1)+'. '+c.name+(c.description?' — '+String(c.description).replace(/\s+/g,' ').slice(0,105):'')).join('\n')
+  return list.map((c,i)=>(i+1)+'. '+c.name+' — '+safeDescription(c).slice(0,120)).join('\n')
 }
 function coursePitch(c){
-  const parts=[c.name+'.']
-  if(c.description) parts.push(String(c.description).replace(/\s+/g,' ').trim())
+  const parts=[c.name+'.',safeDescription(c)]
   if(Number(c.duration_months_1x_week)>0) parts.push('Duração de referência: cerca de '+c.duration_months_1x_week+' '+(Number(c.duration_months_1x_week)===1?'mês':'meses')+'.')
   if(Number(c.workload_hours)>0) parts.push('Carga horária: '+c.workload_hours+' horas.')
   return parts.join('\n')
@@ -293,8 +316,8 @@ Deno.serve(async req=>{
     }
 
     if(wantsPrice(message)&&s.course_interest){
-      const {data:course}=await sb.from('courses').select('id,name,type,description,duration_months_1x_week,workload_hours').eq('active',true).ilike('name',s.course_interest).limit(1).maybeSingle()
-      const price=course?await presentOffer(sb,course):offerText(await currentOffer(sb))
+      const {data:course}=await sb.from('courses').select('id,name,type,description,duration_months_1x_week,workload_hours').eq('active',true).eq('type',s.course_type||'pago').ilike('name',s.course_interest).limit(1).maybeSingle()
+      const price=course&&course.type==='gratuito'?'Essa formação está cadastrada como gratuita. A equipe confirma apenas turma, horário e disponibilidade de vaga.':course?await presentOffer(sb,course):offerText(await currentOffer(sb))
       const out=price?price+'\n\nSe essa condição fizer sentido para você, posso registrar seu interesse e deixar o atendimento pronto para a equipe.':'Os valores dependem da formação e da modalidade. Posso confirmar a condição da sua escolha antes de você avançar.'
       await append(sb,s.id,'assistant',out,{assistant:'Lico',kind:'pricing',stage:s.stage})
       return reply(req,{ok:true,token,stage:s.stage,message:out})
@@ -316,12 +339,12 @@ Deno.serve(async req=>{
         if(direct){
           next='availability'
           patch={course_interest:direct.name,course_type:direct.type,objective:text(message,400),stage:next,lead_score:35,metadata:Object.assign({},s.metadata||{},{bot_version:BOT_VERSION,architecture:'standalone_liveconnect',free_only:onlyFree})}
-          out=coursePitch(direct)+'\n\nPara eu te orientar melhor: você prefere presencial ou EAD? Se for presencial, qual período funciona melhor — manhã, tarde ou noite?'
+          out=coursePitch(direct)+'\n\n'+(direct.type==='gratuito'?'Os cursos gratuitos são presenciais. Qual período funciona melhor para você — manhã, tarde ou noite?':'Qual modalidade você prefere para eu registrar sua preferência: presencial ou EAD? Se for presencial, qual período funciona melhor — manhã, tarde ou noite?')
         }else{
           const picks=await recommend(sb,message,onlyFree)
           next='course'
           patch={objective:text(message,500),stage:next,lead_score:20,metadata:Object.assign({},s.metadata||{},{bot_version:BOT_VERSION,architecture:'standalone_liveconnect',free_only:onlyFree,suggestions:picks.map(x=>({id:x.id,name:x.name,type:x.type}))})}
-          out=picks.length?(onlyFree?'Separei algumas opções gratuitas que podem fazer sentido:':'Pelo que você me contou, estas opções podem combinar com o que você procura:')+'\n\n'+courseList(picks)+'\n\nQual delas te interessa mais? Se nenhuma, me diga a área que você prefere.':'Me diga uma área que você gostaria de estudar, como Administrativo, Tecnologia, Saúde, Marketing, Idiomas ou Beleza.'
+          out=picks.length?(onlyFree?'Separei algumas opções gratuitas que podem fazer sentido:':'Pelo que você me contou, estas opções podem combinar com o que você procura:')+'\n\n'+courseList(picks)+'\n\nQual delas te interessa mais? Se nenhuma, me diga a área que você prefere.':(onlyFree?'Temos opções gratuitas, sim. Qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing ou outra?':'Para eu não te indicar um curso aleatório, qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing, Idiomas, Beleza ou outra?')
         }
       }
     }else if(stage==='course'){
@@ -339,20 +362,26 @@ Deno.serve(async req=>{
       }else{
         next='availability'
         patch={course_interest:selected.name,course_type:selected.type,stage:next,lead_score:40}
-        out=coursePitch(selected)+'\n\nVocê prefere presencial ou EAD? Se for presencial, qual período funciona melhor — manhã, tarde ou noite?'
+        out=coursePitch(selected)+'\n\n'+(selected.type==='gratuito'?'Os cursos gratuitos são presenciais. Qual período funciona melhor para você — manhã, tarde ou noite?':'Qual modalidade você prefere para eu registrar sua preferência: presencial ou EAD? Se for presencial, qual período funciona melhor — manhã, tarde ou noite?')
       }
     }else if(stage==='availability'){
+      const neg=negativeAvailability(message)
       const av=parseAvailability(message)
-      if(!av) out='Só preciso entender sua disponibilidade: prefere presencial ou EAD? Se presencial, qual período — manhã, tarde ou noite?'
+      if(neg) out='Entendi que '+neg+' não funciona para você. Qual opção funciona melhor? '+(s.course_type==='gratuito'?'Os gratuitos são presenciais; pode ser manhã, tarde ou noite.':'Pode ser presencial de manhã, tarde ou noite, ou EAD.')
+      else if(!av) out=s.course_type==='gratuito'?'Só preciso entender seu período disponível para o presencial: manhã, tarde ou noite.':'Só preciso entender sua preferência: presencial ou EAD? Se presencial, qual período — manhã, tarde ou noite?'
       else{
-        const {data:course}=await sb.from('courses').select('id,name,type,description,duration_months_1x_week,workload_hours').eq('active',true).ilike('name',s.course_interest||'').limit(1).maybeSingle()
-        const offer=course?await presentOffer(sb,course):''
+        const {data:course}=await sb.from('courses').select('id,name,type,description,duration_months_1x_week,workload_hours').eq('active',true).eq('type',s.course_type||'pago').ilike('name',s.course_interest||'').limit(1).maybeSingle()
+        const isFree=(s.course_type==='gratuito'||course?.type==='gratuito')
+        const offer=isFree?'':course?await presentOffer(sb,course):''
         next='offer'
         patch={stage:next,lead_score:65,metadata:Object.assign({},s.metadata||{},{availability:av,bot_version:BOT_VERSION,architecture:'standalone_liveconnect'})}
-        out=(course?coursePitch(course):(s.course_interest||'Essa formação'))+'\n\n'+(offer?offer+'\n\n':'')+'Se fizer sentido para você, posso registrar seu interesse e deixar seu atendimento pronto para a equipe. Quer avançar?'
+        out=(course?coursePitch(course):(s.course_interest||'Essa formação'))+'\n\n'+(isFree?'Essa opção é gratuita e presencial. A equipe confirma a turma, o horário e a disponibilidade de vaga antes da inscrição.\n\n':offer?offer+'\n\n':'')+'Se fizer sentido para você, posso registrar seu interesse e deixar seu atendimento pronto para a equipe. Quer avançar?'
       }
     }else if(stage==='offer'){
-      if(yes(message)||wantsEnroll(message)){
+      const offerN=norm(message)
+      if(/\b(caro|pesado|valor alto|nao cabe|sem dinheiro|nao consigo pagar|nao tenho como pagar)\b/.test(offerN)){
+        out=s.course_type==='gratuito'?'Essa opção é gratuita. Se a preocupação for algum custo adicional, a equipe pode confirmar exatamente o que está incluído antes da inscrição.':'Entendo. Se o valor total ficou pesado, o Tradicional permite organizar o investimento mês a mês; a Profissão Rápida é a alternativa para quem prioriza acelerar a formação. Qual formato fica mais viável para você?'
+      }else if(yes(message)||wantsEnroll(message)){
         next='contact_name'
         patch={stage:next,status:'qualified',lead_score:78}
         out=askName()
