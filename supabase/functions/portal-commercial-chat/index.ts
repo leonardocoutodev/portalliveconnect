@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.4'
+const BOT_VERSION = 'liveconnect-basic-sales-1.5'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -32,6 +32,18 @@ function wantsFree(v){ return /\b(gratis|gratuito|gratuita|de graca|sem pagar)\b
 function wantsEnroll(v){ return /\b(matricula|matricular|inscrever|inscricao|fechar|garantir vaga)\b/.test(norm(v)) }
 function yes(v){ return /^(sim|s|quero|tenho interesse|pode|vamos|claro|ok|beleza|fechado|gostei)\b/.test(norm(v)) }
 function no(v){ return /^(nao|n|agora nao|depois|sem interesse)\b/.test(norm(v)) }
+
+function parseRecipient(v){
+  const n=norm(v)
+  if(/\b(para mim|pra mim|eu|meu|eu mesmo|eu mesma)\b/.test(n)) return {relationship:'self',label:'você'}
+  if(/\b(filho|filha)\b/.test(n)) return {relationship:'filho',label:'seu filho(a)'}
+  if(/\b(neto|neta)\b/.test(n)) return {relationship:'neto',label:'seu neto(a)'}
+  if(/\b(irmao|irma)\b/.test(n)) return {relationship:'irmao',label:'seu irmão/irmã'}
+  if(/\b(esposa|marido|companheiro|companheira|conjuge)\b/.test(n)) return {relationship:'conjuge',label:'seu cônjuge'}
+  if(/\b(sobrinho|sobrinha)\b/.test(n)) return {relationship:'sobrinho',label:'seu sobrinho(a)'}
+  if(/\b(pai|mae|mãe|avo|avô|avó|amigo|amiga|outra pessoa|outra|outro)\b/.test(n)) return {relationship:'outro',label:'outra pessoa'}
+  return null
+}
 
 function parseName(v){
   let s=text(v,100).replace(/\s+/g,' ').trim()
@@ -243,8 +255,11 @@ async function ensureLead(sb,s){
 function hello(){
   return 'Olá! Eu sou o Lico, assistente da Live Connect. Posso te ajudar a escolher um curso, consultar valores e horários ou entender como funciona a matrícula. O que você procura hoje?'
 }
+function askRecipient(){
+  return 'Ótimo. Esse curso é para você ou para outra pessoa?'
+}
 function askName(){
-  return 'Ótimo. Para eu registrar seu interesse para a equipe, como posso te chamar? Pode informar só o seu primeiro nome.'
+  return 'Perfeito. Para eu registrar seu interesse para a equipe, como posso te chamar? Pode informar só o seu primeiro nome.'
 }
 function askPhone(name){
   return 'Perfeito'+(name?', '+name:'')+'. Qual é o seu WhatsApp com DDD para a equipe conseguir continuar seu atendimento, se necessário?'
@@ -389,11 +404,19 @@ Deno.serve(async req=>{
       if(/\b(caro|pesado|valor alto|nao cabe|sem dinheiro|nao consigo pagar|nao tenho como pagar)\b/.test(offerN)){
         out=s.course_type==='gratuito'?'Essa opção é gratuita. Se a preocupação for algum custo adicional, a equipe pode confirmar exatamente o que está incluído antes da inscrição.':'Entendo. Se o valor total ficou pesado, o Tradicional permite organizar o investimento mês a mês; a Profissão Rápida é a alternativa para quem prioriza acelerar a formação. Qual formato fica mais viável para você?'
       }else if(yes(message)||wantsEnroll(message)){
-        next='contact_name'
-        patch={stage:next,status:'qualified',lead_score:78}
-        out=askName()
+        next='recipient'
+        patch={stage:next,status:'qualified',lead_score:72}
+        out=askRecipient()
       }else if(no(message)) out='Sem problema. O que pesou mais para você: valor, horário, modalidade ou o próprio curso? Posso tentar te orientar sem compromisso.'
       else out='Pode me dizer sua dúvida. Se preferir avançar, basta responder “quero”.'
+    }else if(stage==='recipient'){
+      const recipient=parseRecipient(message)
+      if(!recipient) out='É para você ou para outra pessoa? Pode responder, por exemplo, “para mim” ou “meu filho”.'
+      else{
+        next='contact_name'
+        patch={relationship:recipient.relationship,stage:next,lead_score:78,metadata:Object.assign({},s.metadata||{},{recipient_label:recipient.label,recipient_raw:text(message,120)})}
+        out=recipient.relationship==='self'?askName():'Entendi. E como posso te chamar? Pode informar só o seu primeiro nome.'
+      }
     }else if(stage==='contact_name'){
       const name=parseName(message)
       if(!name) out='Pode me dizer só o seu primeiro nome? Por exemplo: Leonardo.'
