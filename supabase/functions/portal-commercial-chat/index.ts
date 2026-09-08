@@ -63,10 +63,7 @@ function openStatus(v){ return ['qualifying','qualified','closing','handoff'].in
 
 async function client(){
   const url=Deno.env.get('SUPABASE_URL')
-  const raw=Deno.env.get('SUPABASE_SECRET_KEYS')
-  let secret=null
-  try{ secret=raw?JSON.parse(raw).default:null }catch{}
-  secret=secret||Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const secret=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if(!url||!secret) throw new Error('supabase_config_missing')
   return createClient(url,secret,{auth:{persistSession:false,autoRefreshToken:false}})
 }
