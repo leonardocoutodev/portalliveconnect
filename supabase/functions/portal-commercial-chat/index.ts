@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.2'
+const BOT_VERSION = 'liveconnect-basic-sales-1.3'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -156,7 +156,7 @@ function courseScore(course,message){
 async function matchCourse(sb,message,onlyFree=false){
   const list=await getCourses(sb,onlyFree?'gratuito':'pago')
   const ranked=list.map(c=>({c,s:courseScore(c,message)})).sort((a,b)=>b.s-a.s)
-  return ranked[0]&&ranked[0].s>=30?ranked[0].c:null
+  return ranked[0]&&ranked[0].s>=40?ranked[0].c:null
 }
 async function recommend(sb,message,onlyFree=false){
   const list=await getCourses(sb,onlyFree?'gratuito':'pago')
