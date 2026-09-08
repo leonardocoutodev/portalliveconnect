@@ -52,22 +52,23 @@ Deno.serve(async(req:Request)=>{
     const {data:canWrite,error:accessErr}=await actor.rpc('school_chat_can_access',{p_channel_id:channelId,p_write:true})
     if(accessErr||canWrite!==true)return reply(req,{ok:false,error:'forbidden'},403)
 
-    const [{data:channel,error:chErr},{data:profiles,error:prErr},{data:perms,error:pmErr},{data:subs,error:subErr}]=await Promise.all([
-      service.from('school_chat_channels').select('id,name,channel_type,participant_roles').eq('id',channelId).maybeSingle(),
+    const [{data:channel,error:chErr},{data:profiles,error:prErr},{data:perms,error:pmErr},{data:members,error:memErr},{data:subs,error:subErr}]=await Promise.all([
+      service.from('school_chat_channels').select('id,name,channel_type').eq('id',channelId).maybeSingle(),
       service.from('profiles').select('id,full_name,role,active').eq('active',true),
       service.from('school_staff_permissions').select('user_id,can_manage_chat'),
+      service.from('school_chat_channel_members').select('user_id').eq('channel_id',channelId),
       service.from('school_push_subscriptions').select('id,user_id,endpoint,p256dh,auth').eq('active',true)
     ])
-    if(chErr||prErr||pmErr||subErr)throw chErr||prErr||pmErr||subErr
+    if(chErr||prErr||pmErr||memErr||subErr)throw chErr||prErr||pmErr||memErr||subErr
     if(!channel)return reply(req,{ok:false,error:'channel_not_found'},404)
     const pmap=new Map((perms||[]).map((x:any)=>[x.user_id,x]))
+    const memberIds=new Set((members||[]).map((x:any)=>x.user_id))
     const allowedUsers=new Set<string>()
     for(const p of profiles||[]){
       if(p.id===senderId)continue
-      const chatAllowed=p.role==='master_admin'||p.role==='coadmin'||pmap.get(p.id)?.can_manage_chat===true
+      const chatAllowed=p.role==='master_admin'||pmap.get(p.id)?.can_manage_chat===true
       if(!chatAllowed)continue
-      const chatRole=p.role==='master_admin'?'admin_comercial':p.role
-      if(channel.channel_type==='public'||(channel.participant_roles||[]).includes(chatRole))allowedUsers.add(p.id)
+      if(channel.channel_type==='public'||memberIds.has(p.id))allowedUsers.add(p.id)
     }
     const sender=(profiles||[]).find((p:any)=>p.id===senderId)
     const payload=JSON.stringify({
