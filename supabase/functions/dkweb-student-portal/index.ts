@@ -321,6 +321,146 @@ function normalizeAcademicSummary(input: Record<string, unknown>): Record<string
   return data;
 }
 
+function financeTodayBahia(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bahia",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function normalizeFinanceSummary(input: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = { ...input };
+  const rawFinance = academicArray(data.finance);
+  const courses = academicArray(data.courses);
+  const currentCourseIds = new Set(
+    courses
+      .map((course) => academicClean(course.id_aluno_curso))
+      .filter(Boolean),
+  );
+
+  const today = financeTodayBahia();
+  const seenLaunches = new Set<string>();
+  const normalized: Record<string, unknown>[] = [];
+  let duplicateLaunchesRemoved = 0;
+  let reversedRemoved = 0;
+  let otherCourseRowsRemoved = 0;
+
+  for (const original of rawFinance) {
+    const reversed = academicNorm(original.estornado) === "S";
+    if (reversed) {
+      reversedRemoved++;
+      continue;
+    }
+
+    const courseLink = academicClean(original.id_aluno_curso);
+    if (currentCourseIds.size && courseLink && !currentCourseIds.has(courseLink)) {
+      otherCourseRowsRemoved++;
+      continue;
+    }
+
+    const launchId = academicClean(original.numero_lancamento);
+    const stableKey = launchId || [
+      courseLink,
+      academicClean(original.vencimento),
+      academicClean(original.historico),
+      academicClean(original.valor),
+    ].join("|");
+    if (seenLaunches.has(stableKey)) {
+      duplicateLaunchesRemoved++;
+      continue;
+    }
+    seenLaunches.add(stableKey);
+
+    const dueDate = academicClean(original.vencimento);
+    const paid = academicNorm(original.quitado) === "S";
+    let portalStatus = "unknown";
+    let portalStatusLabel = "A confirmar";
+
+    if (paid) {
+      portalStatus = "paid";
+      portalStatusLabel = "Pago";
+    } else if (academicValidDate(dueDate)) {
+      if (dueDate < today) {
+        portalStatus = "overdue";
+        portalStatusLabel = "Vencido";
+      } else if (dueDate === today) {
+        portalStatus = "due_today";
+        portalStatusLabel = "Vence hoje";
+      } else {
+        portalStatus = "upcoming";
+        portalStatusLabel = "A vencer";
+      }
+    }
+
+    normalized.push({
+      ...original,
+      id_aluno_curso: courseLink,
+      numero_lancamento: launchId,
+      portal_status: portalStatus,
+      portal_status_label: portalStatusLabel,
+      portal_is_overdue: portalStatus === "overdue",
+      portal_is_upcoming: portalStatus === "upcoming",
+    });
+  }
+
+  const paidRows = normalized.filter((row) => row.portal_status === "paid");
+  const overdueRows = normalized.filter((row) => row.portal_status === "overdue");
+  const dueTodayRows = normalized.filter((row) => row.portal_status === "due_today");
+  const upcomingRows = normalized.filter((row) => row.portal_status === "upcoming");
+  const unknownRows = normalized.filter((row) => row.portal_status === "unknown");
+
+  const visibleHistory = normalized.filter((row) =>
+    row.portal_status === "paid" ||
+    row.portal_status === "overdue" ||
+    row.portal_status === "due_today"
+  );
+
+  const sortByDueAsc = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    academicClean(a.vencimento).localeCompare(academicClean(b.vencimento));
+
+  const nextDue = [...upcomingRows].sort(sortByDueAsc)[0] ?? null;
+  const oldestOverdue = [...overdueRows].sort(sortByDueAsc)[0] ?? null;
+
+  data.finance_all = normalized;
+  data.finance = visibleHistory;
+  data.finance_upcoming = upcomingRows;
+  data.finance_review = unknownRows;
+  data.finance_summary = {
+    source: "dkweb.caixa",
+    as_of_date: today,
+    status: overdueRows.length
+      ? "overdue"
+      : dueTodayRows.length
+      ? "due_today"
+      : "ok",
+    paid_count: paidRows.length,
+    overdue_count: overdueRows.length,
+    due_today_count: dueTodayRows.length,
+    upcoming_count: upcomingRows.length,
+    review_count: unknownRows.length,
+    next_due_date: nextDue ? academicClean(nextDue.vencimento) : null,
+    next_due_amount: nextDue ? academicClean(nextDue.valor) : null,
+    oldest_overdue_date: oldestOverdue ? academicClean(oldestOverdue.vencimento) : null,
+    future_installments_are_debt: false,
+  };
+  data.finance_normalization = {
+    version: "1",
+    rows_raw: rawFinance.length,
+    rows_normalized: normalized.length,
+    visible_history_rows: visibleHistory.length,
+    upcoming_rows: upcomingRows.length,
+    reversed_rows_removed: reversedRemoved,
+    duplicate_launches_removed: duplicateLaunchesRemoved,
+    other_course_rows_removed: otherCourseRowsRemoved,
+  };
+  data.portal_data_version = "5.10.4";
+  return data;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return response(405, { ok: false, error: "method_not_allowed" });
@@ -478,6 +618,7 @@ Deno.serve(async (req: Request) => {
     }
     if (bridge.ok && data.ok === true) {
       data = normalizeAcademicSummary(data);
+      data = normalizeFinanceSummary(data);
     }
     return response(bridge.status, data);
   } catch {
