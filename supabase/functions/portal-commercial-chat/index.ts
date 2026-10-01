@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-basic-sales-1.5'
+const BOT_VERSION = 'liveconnect-router-2.0'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
@@ -32,6 +32,33 @@ function wantsFree(v){ return /\b(gratis|gratuito|gratuita|de graca|sem pagar)\b
 function wantsEnroll(v){ return /\b(matricula|matricular|inscrever|inscricao|fechar|garantir vaga)\b/.test(norm(v)) }
 function yes(v){ return /^(sim|s|quero|tenho interesse|pode|vamos|claro|ok|beleza|fechado|gostei)\b/.test(norm(v)) }
 function no(v){ return /^(nao|n|agora nao|depois|sem interesse)\b/.test(norm(v)) }
+
+function isUuid(v){ return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(v||'')) }
+
+function detectIntent(v){
+  const n=norm(v)
+  if(wantsHuman(v)) return 'human'
+  if(/\b(nao consigo|nao estou conseguindo|problema|erro|dificuldade|esqueci|perdi)\b.*\b(entrar|acessar|login|senha|curso|ead|portal|aula)\b/.test(n) ||
+     /\b(meu curso|meu ead|portal do aluno|area do aluno|acesso ead|login ead|senha ead)\b/.test(n)) return 'support_ead'
+  if(/\b(boleto|segunda via|pagamento|pagar|parcela|parcelas|mensalidade|financeiro|cobranca|vencimento|pix)\b/.test(n) &&
+     /\b(meu|minha|sou aluno|ja sou aluno|paguei|pago|atrasad|vencid|segunda via|boleto|financeiro|cobranca)\b/.test(n)) return 'support_financial'
+  if(/\b(nota|notas|media|frequencia|presenca|falta|modulo|material|apostila|certificado|professor|turma)\b/.test(n) &&
+     /\b(meu|minha|aluno|curso|portal|turma|nota|certificado|material)\b/.test(n)) return 'support_student'
+  if(/\b(jovem aprendiz|menor aprendiz|aprendiz)\b/.test(n)) return 'young_apprentice'
+  if(wantsAddress(v)) return 'address'
+  if(wantsEnroll(v)) return 'enrollment'
+  if(wantsPrice(v)) return 'price'
+  if(wantsFree(v)) return 'free_course'
+  if(isGreeting(v)) return 'greeting'
+  return 'commercial'
+}
+
+function supportLabel(intent){
+  if(intent==='support_ead') return 'acesso ao EAD'
+  if(intent==='support_financial') return 'financeiro/pagamento'
+  if(intent==='support_student') return 'suporte acadêmico'
+  return 'atendimento'
+}
 
 function parseRecipient(v){
   const n=norm(v)
@@ -109,12 +136,177 @@ async function history(sb,id,limit=80){
   if(error) throw error
   return [...(data||[])].reverse()
 }
+
+async function recordEvent(sb,s,eventType,topic,context={}){
+  try{
+    await sb.from('lico_learning_events').insert({
+      session_id:s?.id||null,
+      lead_id:s?.lead_id||null,
+      event_type:eventType,
+      topic:topic||null,
+      course_name:s?.course_interest||null,
+      context:Object.assign({bot_version:BOT_VERSION},context||{})
+    })
+  }catch{}
+}
+
+async function syncMemory(sb,sessionId){
+  try{
+    const {data:s}=await sb.from('commercial_chat_sessions')
+      .select('id,visitor_key,lead_id,full_name,whatsapp,objective,course_interest,course_type,relationship,metadata')
+      .eq('id',sessionId).maybeSingle()
+    if(!s?.visitor_key) return
+    const memory={
+      full_name:s.full_name||null,
+      whatsapp:s.whatsapp||null,
+      objective:s.objective||null,
+      course_interest:s.course_interest||null,
+      course_type:s.course_type||null,
+      relationship:s.relationship||null,
+      last_intent:s.metadata?.intent||null
+    }
+    await sb.from('commercial_chat_memories').upsert({
+      visitor_key:s.visitor_key,
+      lead_id:s.lead_id||null,
+      memory,
+      last_seen_at:new Date().toISOString(),
+      updated_at:new Date().toISOString()
+    },{onConflict:'visitor_key'})
+  }catch{}
+}
+
+async function findLeadByPhone(sb,phone){
+  const p=parsePhone(phone)
+  if(!p) return null
+  const candidates=[p,p.replace(/^55/,'')].filter(Boolean)
+  const {data}=await sb.from('leads')
+    .select('id,full_name,whatsapp,status,lead_score')
+    .or('whatsapp.in.('+candidates.join(',')+'),whatsapp_normalized.in.('+candidates.join(',')+')')
+    .is('deleted_at',null)
+    .order('updated_at',{ascending:false})
+    .limit(1)
+  return data?.[0]||null
+}
+
+async function handoffSession(sb,s,topic,visitorMessage,customMessage=null){
+  const summary=[
+    'Origem: chatbot do site',
+    'Assunto: '+supportLabel(topic),
+    s.full_name?'Nome: '+s.full_name:null,
+    s.whatsapp?'WhatsApp: '+s.whatsapp:null,
+    s.course_interest?'Curso: '+s.course_interest:null,
+    visitorMessage?'Relato: '+text(visitorMessage,500):null
+  ].filter(Boolean).join(' | ')
+  const nextAction=topic==='support_ead'
+    ?'Verificar cadastro e credenciais de acesso ao EAD.'
+    :topic==='support_financial'
+      ?'Verificar situação financeira e orientar o aluno.'
+      :topic==='support_student'
+        ?'Verificar a solicitação acadêmica do aluno.'
+        :'Assumir o atendimento humano pelo chat.'
+  const patch={
+    status:'handoff',
+    stage:'handoff',
+    handoff_summary:summary,
+    next_best_action:nextAction,
+    metadata:Object.assign({},s.metadata||{},{intent:topic,handoff_at:new Date().toISOString(),bot_version:BOT_VERSION})
+  }
+  await patchSession(sb,s.id,patch)
+  try{
+    await sb.from('notifications').insert({
+      type:'chat_handoff',
+      title:topic==='human'?'Novo atendimento solicitado no site':'Suporte solicitado pelo chatbot',
+      body:summary,
+      severity:topic==='support_ead'?'warning':'info',
+      related_lead_id:s.lead_id||null
+    })
+  }catch{}
+  await recordEvent(sb,Object.assign({},s,patch),'handoff_created',topic,{summary})
+  await syncMemory(sb,s.id)
+  const out=customMessage || 'Certo. Já deixei seu atendimento encaminhado para a equipe da Live Connect. Você pode continuar escrevendo por aqui.'
+  await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'handoff',intent:topic,bot_version:BOT_VERSION})
+  return {stage:'handoff',handoff:true,message:out}
+}
+
+async function beginSupport(sb,s,intent,message){
+  const meta=Object.assign({},s.metadata||{},{intent,support_topic:supportLabel(intent),bot_version:BOT_VERSION})
+  if(s.full_name&&s.whatsapp){
+    return await handoffSession(sb,Object.assign({},s,{metadata:meta}),intent,message,
+      'Entendi. Isso é '+supportLabel(intent)+', não uma nova venda. Já encaminhei seu caso para a equipe com os dados que você informou anteriormente.')
+  }
+  if(!s.full_name){
+    await patchSession(sb,s.id,{stage:'support_name',objective:text(message,500),metadata:meta})
+    await recordEvent(sb,s,'support_started',intent,{message:text(message,300)})
+    const out='Entendi. Isso é '+supportLabel(intent)+', não uma nova matrícula. Para eu localizar seu atendimento corretamente, como você se chama? Pode informar seu primeiro nome.'
+    await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_name',intent,bot_version:BOT_VERSION})
+    return {stage:'support_name',handoff:false,message:out}
+  }
+  await patchSession(sb,s.id,{stage:'support_whatsapp',objective:text(message,500),metadata:meta})
+  const out='Entendi, '+String(s.full_name).split(' ')[0]+'. Qual é o WhatsApp com DDD usado no seu cadastro?'
+  await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_whatsapp',intent,bot_version:BOT_VERSION})
+  return {stage:'support_whatsapp',handoff:false,message:out}
+}
+
+async function continueSupport(sb,s,message){
+  const intent=s.metadata?.intent||'support_student'
+  if(s.stage==='support_name'){
+    const name=parseName(message)
+    if(!name){
+      const out='Para eu localizar seu atendimento, me diga somente seu nome ou primeiro nome.'
+      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_name',intent,bot_version:BOT_VERSION})
+      return {stage:'support_name',handoff:false,message:out}
+    }
+    await patchSession(sb,s.id,{full_name:name,stage:'support_whatsapp'})
+    await syncMemory(sb,s.id)
+    const out='Obrigado, '+name.split(' ')[0]+'. Agora me envie o WhatsApp com DDD usado no cadastro.'
+    await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_whatsapp',intent,bot_version:BOT_VERSION})
+    return {stage:'support_whatsapp',handoff:false,message:out}
+  }
+  if(s.stage==='support_whatsapp'){
+    const phone=parsePhone(message)
+    if(!phone){
+      const out='Não consegui validar o número. Envie com DDD, por exemplo: (73) 99999-9999.'
+      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_whatsapp',intent,bot_version:BOT_VERSION})
+      return {stage:'support_whatsapp',handoff:false,message:out}
+    }
+    const lead=await findLeadByPhone(sb,phone).catch(()=>null)
+    const patch={whatsapp:phone}
+    if(lead?.id) patch.lead_id=lead.id
+    await patchSession(sb,s.id,patch)
+    const fresh=Object.assign({},s,patch)
+    return await handoffSession(sb,fresh,intent,s.objective||message,
+      'Perfeito. Identifiquei seu pedido de '+supportLabel(intent)+' e já deixei tudo encaminhado para a equipe. Você pode continuar escrevendo por aqui.')
+  }
+  return null
+}
 async function createSession(sb,meta={}){
+  const visitorKey=isUuid(meta.visitor_key||meta.visitorKey)?String(meta.visitor_key||meta.visitorKey):null
+  let memoryRow=null
+  if(visitorKey){
+    try{
+      const {data}=await sb.from('commercial_chat_memories').select('*').eq('visitor_key',visitorKey).maybeSingle()
+      memoryRow=data||null
+      if(!memoryRow){
+        const {data:created}=await sb.from('commercial_chat_memories').insert({visitor_key:visitorKey,memory:{},conversation_count:0}).select('*').single()
+        memoryRow=created||null
+      }
+    }catch{}
+  }
+  const mem=memoryRow?.memory&&typeof memoryRow.memory==='object'?memoryRow.memory:{}
   const row={
     status:'qualifying',
     stage:'discovery',
     lead_score:0,
     source:'portal_chatbot',
+    visitor_key:visitorKey,
+    memory_id:memoryRow?.id||null,
+    lead_id:memoryRow?.lead_id||null,
+    full_name:text(mem.full_name,120)||null,
+    whatsapp:parsePhone(mem.whatsapp)||null,
+    objective:text(mem.objective,500)||null,
+    course_interest:text(mem.course_interest,200)||null,
+    course_type:text(mem.course_type,40)||null,
+    relationship:text(mem.relationship,40)||null,
     landing_page:text(meta.landing_page,300)||null,
     referrer:text(meta.referrer,300)||null,
     utm_source:text(meta.utm_source,120)||null,
@@ -123,12 +315,16 @@ async function createSession(sb,meta={}){
     utm_content:text(meta.utm_content,120)||null,
     metadata:{
       bot_version:BOT_VERSION,
-      architecture:'standalone_liveconnect',
-      course_slug:text(meta.course_slug,160)||null
+      architecture:'intent_router_v2',
+      course_slug:text(meta.course_slug,160)||null,
+      memory_reused:!!memoryRow&&Object.keys(mem||{}).length>0
     }
   }
   const {data,error}=await sb.from('commercial_chat_sessions').insert(row).select('*').single()
   if(error) throw error
+  if(memoryRow?.id){
+    try{ await sb.from('commercial_chat_memories').update({conversation_count:Number(memoryRow.conversation_count||0)+1,last_seen_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',memoryRow.id) }catch{}
+  }
   return data
 }
 async function getCourses(sb,type=null){
@@ -253,7 +449,7 @@ async function ensureLead(sb,s){
 }
 
 function hello(){
-  return 'Olá! Eu sou o Lico, assistente da Live Connect. Posso te ajudar a escolher um curso, consultar valores e horários ou entender como funciona a matrícula. O que você procura hoje?'
+  return 'Olá! Eu sou o Lico, assistente da Live Connect. Posso te ajudar com cursos, valores, horários e matrícula — e também com acesso ao EAD, portal do aluno ou outras dúvidas de quem já estuda com a gente. O que você precisa hoje?'
 }
 function askRecipient(){
   return 'Ótimo. Esse curso é para você ou para outra pessoa?'
@@ -267,7 +463,7 @@ function askPhone(name){
 
 Deno.serve(async req=>{
   if(req.method==='OPTIONS') return new Response('ok',{headers:cors(req)})
-  if(req.method!=='POST') return reply(req,{ok:false,error:'method_not_allowed'},405)
+    if(req.method!=='POST') return reply(req,{ok:false,error:'method_not_allowed'},405)
   const origin=req.headers.get('origin')||''
   if(origin&&!ALLOWED.has(origin)&&!origin.startsWith('http://localhost:')&&!origin.startsWith('http://127.0.0.1:')) return reply(req,{ok:false,error:'origin_not_allowed'},403)
 
@@ -276,6 +472,11 @@ Deno.serve(async req=>{
     if(text(body.website,100)) return reply(req,{ok:true})
     const sb=await client()
     const action=text(body.action,30)||'message'
+
+    if(action==='health'){
+      const {data:settings}=await sb.from('lico_runtime_settings').select('memory_enabled,learning_enabled,session_idle_minutes').eq('id',1).maybeSingle()
+      return reply(req,{ok:true,bot_version:BOT_VERSION,settings:settings||null,ai_provider_configured:!!Deno.env.get('OPENAI_API_KEY')})
+    }
 
     if(action==='start'){
       const token=text(body.token,80)
@@ -289,8 +490,12 @@ Deno.serve(async req=>{
       }
       if(current) await patchSession(sb,current.id,{status:'closed',metadata:Object.assign({},current.metadata||{},{closed_reason:'bot_version_upgrade'})})
       const fresh=await createSession(sb,body.context&&typeof body.context==='object'?body.context:{})
-      const out=hello()
-      await append(sb,fresh.id,'assistant',out,{assistant:'Lico',stage:'discovery',bot_version:BOT_VERSION})
+      const remembered=!!fresh.metadata?.memory_reused
+      const first=fresh.full_name?String(fresh.full_name).split(' ')[0]:''
+      const out=remembered&&first
+        ?'Olá, '+first+'! Que bom te ver novamente. Posso retomar seu interesse'+(fresh.course_interest?' em '+fresh.course_interest:'')+' ou te ajudar com outra coisa. O que você precisa hoje?'
+        :hello()
+      await append(sb,fresh.id,'assistant',out,{assistant:'Lico',stage:'discovery',bot_version:BOT_VERSION,memory_reused:remembered})
       return reply(req,{ok:true,token:fresh.public_token,session_id:fresh.id,stage:'discovery',status:'qualifying',new_session:true,message:out,messages:await history(sb,fresh.id)})
     }
 
@@ -320,11 +525,73 @@ Deno.serve(async req=>{
 
     if(s.assigned_to||s.status==='handoff') return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:'Recebi sua mensagem. A equipe da Live Connect continuará o atendimento por aqui.'})
 
-    if(wantsHuman(message)){
-      await patchSession(sb,s.id,{status:'handoff',stage:'handoff'})
-      const out='Claro. Vou encaminhar seu atendimento para a equipe da Live Connect. Você pode continuar escrevendo por aqui.'
-      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'handoff'})
-      return reply(req,{ok:true,token,stage:'handoff',handoff:true,message:out})
+    if(s.stage==='support_name'||s.stage==='support_whatsapp'){
+      const support=await continueSupport(sb,s,message)
+      if(support) return reply(req,Object.assign({ok:true,token},support))
+    }
+
+    const intent=detectIntent(message)
+    await recordEvent(sb,s,'intent_routed',intent,{message:text(message,300),stage:s.stage})
+
+    if(intent==='human'){
+      const handoff=await handoffSession(sb,s,'human',message)
+      return reply(req,Object.assign({ok:true,token},handoff))
+    }
+    if(['support_ead','support_financial','support_student'].includes(intent)){
+      const support=await beginSupport(sb,s,intent,message)
+      return reply(req,Object.assign({ok:true,token},support))
+    }
+    if(intent==='young_apprentice'){
+      const out='Claro. O Projeto Jovem Aprendiz tem um fluxo próprio na Live Connect. Se você quer participar, posso te orientar sobre o cadastro; se já se cadastrou e precisa de ajuda, também consigo encaminhar para a equipe. Você quer se cadastrar ou já fez o cadastro?'
+      await patchSession(sb,s.id,{stage:'young_apprentice',metadata:Object.assign({},s.metadata||{},{intent:'young_apprentice',bot_version:BOT_VERSION})})
+      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'young_apprentice',intent:'young_apprentice',bot_version:BOT_VERSION})
+      return reply(req,{ok:true,token,stage:'young_apprentice',message:out})
+    }
+
+    if(s.stage==='young_apprentice'){
+      const n=norm(message)
+      if(/\b(ja|cadastrei|fiz|preenchi)\b.*\b(cadastro|inscricao|formulario)\b/.test(n)){
+        const support=await beginSupport(sb,Object.assign({},s,{metadata:Object.assign({},s.metadata||{},{intent:'support_student'})}),'support_student','Acompanhamento do cadastro Jovem Aprendiz: '+message)
+        return reply(req,Object.assign({ok:true,token},support))
+      }
+      const out='Para participar, use o cadastro do Jovem Aprendiz no site da Live Connect: https://www.liveconnect.com.br/jovem-aprendiz/ . Se quiser, depois eu também posso registrar seu interesse aqui para a equipe acompanhar.'
+      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'young_apprentice',intent:'young_apprentice',bot_version:BOT_VERSION})
+      return reply(req,{ok:true,token,stage:'young_apprentice',message:out})
+    }
+
+    const pendingIntent=s.metadata?.pending_intent||null
+    if(pendingIntent==='price'){
+      const direct=await matchCourse(sb,message,wantsFree(message))
+      if(direct){
+        const price=direct.type==='gratuito'
+          ?'Essa formação está cadastrada como gratuita. A equipe confirma turma, horário e disponibilidade de vaga.'
+          :await presentOffer(sb,direct)
+        const meta=Object.assign({},s.metadata||{})
+        delete meta.pending_intent
+        meta.intent='price'
+        meta.bot_version=BOT_VERSION
+        await patchSession(sb,s.id,{course_interest:direct.name,course_type:direct.type,objective:s.objective||text(message,400),stage:'offer',lead_score:60,metadata:meta})
+        const out=coursePitch(direct)+'\n\n'+(price||'Vou confirmar a condição comercial com a equipe.')+'\n\nSe quiser, posso registrar seu interesse sem te obrigar a concluir a matrícula agora.'
+        await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'offer',intent:'price',bot_version:BOT_VERSION})
+        return reply(req,{ok:true,token,stage:'offer',message:out,lead_score:60})
+      }
+    }
+
+    if(intent==='price'&&!s.course_interest){
+      const direct=await matchCourse(sb,message,wantsFree(message))
+      if(direct){
+        const price=direct.type==='gratuito'
+          ?'Essa formação está cadastrada como gratuita. A equipe confirma turma, horário e disponibilidade de vaga.'
+          :await presentOffer(sb,direct)
+        await patchSession(sb,s.id,{course_interest:direct.name,course_type:direct.type,objective:text(message,400),stage:'offer',lead_score:60,metadata:Object.assign({},s.metadata||{},{intent:'price',bot_version:BOT_VERSION})})
+        const out=coursePitch(direct)+'\n\n'+(price||'Vou confirmar a condição comercial com a equipe.')+'\n\nSe quiser, posso registrar seu interesse sem te obrigar a concluir a matrícula agora.'
+        await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'offer',intent:'price',bot_version:BOT_VERSION})
+        return reply(req,{ok:true,token,stage:'offer',message:out,lead_score:60})
+      }
+      await patchSession(sb,s.id,{objective:text(message,400),metadata:Object.assign({},s.metadata||{},{intent:'price',pending_intent:'price',bot_version:BOT_VERSION})})
+      const out='Consigo te passar os valores. Qual curso você quer consultar? Pode escrever só o nome, por exemplo: Informática, Gestão Empresarial ou Gestor de Tráfego.'
+      await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:s.stage,intent:'price',bot_version:BOT_VERSION})
+      return reply(req,{ok:true,token,stage:s.stage,message:out})
     }
 
     if(wantsAddress(message)){
@@ -402,10 +669,11 @@ Deno.serve(async req=>{
     }else if(stage==='offer'){
       const offerN=norm(message)
       if(/\b(caro|pesado|valor alto|nao cabe|sem dinheiro|nao consigo pagar|nao tenho como pagar)\b/.test(offerN)){
-        out=s.course_type==='gratuito'?'Essa opção é gratuita. Se a preocupação for algum custo adicional, a equipe pode confirmar exatamente o que está incluído antes da inscrição.':'Entendo. Se o valor total ficou pesado, o Tradicional permite organizar o investimento mês a mês; a Profissão Rápida é a alternativa para quem prioriza acelerar a formação. Qual formato fica mais viável para você?'
+        patch={primary_objection:'price',next_best_action:'Trabalhar condição de pagamento ou alternativa de menor investimento.'}
+        out=s.course_type==='gratuito'?'Essa opção é gratuita. Se a preocupação for algum custo adicional, a equipe pode confirmar exatamente o que está incluído antes da inscrição.':'Entendo. Se o valor ficou pesado, podemos olhar a forma de pagamento ou até uma alternativa que caiba melhor no seu momento. Você prefere tentar ajustar a condição ou conhecer outra opção?'
       }else if(yes(message)||wantsEnroll(message)){
         next='recipient'
-        patch={stage:next,status:'qualified',lead_score:72}
+        patch={stage:next,status:'qualified',lead_score:72,close_probability:65,next_best_action:'Capturar contato e encaminhar para fechamento.'}
         out=askRecipient()
       }else if(no(message)) out='Sem problema. O que pesou mais para você: valor, horário, modalidade ou o próprio curso? Posso tentar te orientar sem compromisso.'
       else out='Pode me dizer sua dúvida. Se preferir avançar, basta responder “quero”.'
@@ -430,10 +698,12 @@ Deno.serve(async req=>{
       if(!phone) out='Não consegui validar o número. Envie com DDD, por exemplo: (73) 99999-9999.'
       else{
         next='closing'
-        patch={whatsapp:phone,stage:next,status:'qualified',lead_score:92}
+        patch={whatsapp:phone,stage:next,status:'qualified',lead_score:92,qualification_completed_at:new Date().toISOString(),close_probability:80,next_best_action:'Contato comercial para fechamento e confirmação de turma/condição.'}
         await patchSession(sb,s.id,patch)
         const fresh=Object.assign({},s,patch)
         await ensureLead(sb,fresh).catch(()=>null)
+        await recordEvent(sb,fresh,'qualification_completed','commercial',{course_interest:fresh.course_interest||null})
+        await syncMemory(sb,s.id)
         const first=(s.full_name||'').split(' ')[0]
         out='Perfeito'+(first?', '+first:'')+'. Registrei seu interesse em '+(s.course_interest||'uma formação da Live Connect')+' e seu contato. A equipe já pode continuar a partir daqui. Se quiser, ainda posso esclarecer alguma dúvida sobre curso, valor ou horário.'
         await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:next,qualified:true,bot_version:BOT_VERSION})
@@ -450,8 +720,11 @@ Deno.serve(async req=>{
       out=hello()
     }
 
-    if(Object.keys(patch).length) await patchSession(sb,s.id,patch)
-    await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:next,bot_version:BOT_VERSION})
+    if(Object.keys(patch).length){
+      await patchSession(sb,s.id,patch)
+      await syncMemory(sb,s.id)
+    }
+    await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:next,bot_version:BOT_VERSION,intent:detectIntent(message)})
     return reply(req,{ok:true,token,stage:next,message:out,lead_score:Number(patch.lead_score??s.lead_score??0),handoff:next==='handoff'})
   }catch(err){
     console.error('portal-commercial-chat',err)
