@@ -1,7 +1,26 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0'
 
-const BOT_VERSION = 'liveconnect-router-2.0'
+const BOT_VERSION = 'liveconnect-router-2.1'
 const ALLOWED = new Set(['https://www.liveconnect.com.br','https://liveconnect.com.br','https://portallc.netlify.app'])
+
+const WHATSAPP_NUMBER = '557332237593'
+function whatsappUrl(topic='atendimento',s=null){
+  const first=s?.full_name?String(s.full_name).split(' ')[0]:''
+  const labels={
+    support_ead:'acesso ao EAD',
+    support_financial:'financeiro/pagamento',
+    support_student:'suporte acadêmico',
+    human:'atendimento',
+    commercial:'cursos e matrícula',
+    price:'valores e condições'
+  }
+  const assunto=labels[topic]||'atendimento'
+  const msg='Olá! Vim pelo chatbot do site da Live Connect'+(first?' — meu nome é '+first:'')+' e gostaria de falar com um atendente sobre '+assunto+'.'
+  return 'https://wa.me/'+WHATSAPP_NUMBER+'?text='+encodeURIComponent(msg)
+}
+function humanSuggestion(topic='human',s=null){
+  return 'Se preferir falar diretamente com uma pessoa da nossa equipe, é só tocar neste link:\n'+whatsappUrl(topic,s)
+}
 
 const text = (v,max=1000) => String(v ?? '').trim().slice(0,max)
 const digits = v => String(v ?? '').replace(/\D/g,'')
@@ -223,9 +242,11 @@ async function handoffSession(sb,s,topic,visitorMessage,customMessage=null){
   }catch{}
   await recordEvent(sb,Object.assign({},s,patch),'handoff_created',topic,{summary})
   await syncMemory(sb,s.id)
-  const out=customMessage || 'Certo. Já deixei seu atendimento encaminhado para a equipe da Live Connect. Você pode continuar escrevendo por aqui.'
-  await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'handoff',intent:topic,bot_version:BOT_VERSION})
-  return {stage:'handoff',handoff:true,message:out}
+  const wa=whatsappUrl(topic,s)
+  const base=customMessage || 'Certo. Já deixei seu atendimento encaminhado para a equipe da Live Connect.'
+  const out=base+'\n\nSe quiser falar com um atendente agora pelo WhatsApp oficial da Live Connect, toque aqui:\n'+wa
+  await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'handoff',intent:topic,bot_version:BOT_VERSION,whatsapp_url:wa})
+  return {stage:'handoff',handoff:true,message:out,whatsapp_url:wa,actions:[{type:'whatsapp',label:'Falar com atendente',url:wa}]}
 }
 
 async function beginSupport(sb,s,intent,message){
@@ -237,12 +258,12 @@ async function beginSupport(sb,s,intent,message){
   if(!s.full_name){
     await patchSession(sb,s.id,{stage:'support_name',objective:text(message,500),metadata:meta})
     await recordEvent(sb,s,'support_started',intent,{message:text(message,300)})
-    const out='Entendi. Isso é '+supportLabel(intent)+', não uma nova matrícula. Para eu localizar seu atendimento corretamente, como você se chama? Pode informar seu primeiro nome.'
+    const out='Entendi. Isso é '+supportLabel(intent)+', não uma nova matrícula. Para eu localizar seu atendimento corretamente, como você se chama? Pode informar seu primeiro nome.\n\n'+humanSuggestion(intent,s)
     await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_name',intent,bot_version:BOT_VERSION})
     return {stage:'support_name',handoff:false,message:out}
   }
   await patchSession(sb,s.id,{stage:'support_whatsapp',objective:text(message,500),metadata:meta})
-  const out='Entendi, '+String(s.full_name).split(' ')[0]+'. Qual é o WhatsApp com DDD usado no seu cadastro?'
+  const out='Entendi, '+String(s.full_name).split(' ')[0]+'. Qual é o WhatsApp com DDD usado no seu cadastro?\n\n'+humanSuggestion(intent,s)
   await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:'support_whatsapp',intent,bot_version:BOT_VERSION})
   return {stage:'support_whatsapp',handoff:false,message:out}
 }
@@ -629,7 +650,7 @@ Deno.serve(async req=>{
           const picks=await recommend(sb,message,onlyFree)
           next='course'
           patch={objective:text(message,500),stage:next,lead_score:20,metadata:Object.assign({},s.metadata||{},{bot_version:BOT_VERSION,architecture:'standalone_liveconnect',free_only:onlyFree,suggestions:picks.map(x=>({id:x.id,name:x.name,type:x.type}))})}
-          out=picks.length?(onlyFree?'Separei algumas opções gratuitas que podem fazer sentido:':'Pelo que você me contou, estas opções podem combinar com o que você procura:')+'\n\n'+courseList(picks)+'\n\nQual delas te interessa mais? Se nenhuma, me diga a área que você prefere.':(onlyFree?'Temos opções gratuitas, sim. Qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing ou outra?':'Para eu não te indicar um curso aleatório, qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing, Idiomas, Beleza ou outra?')
+          out=picks.length?(onlyFree?'Separei algumas opções gratuitas que podem fazer sentido:':'Pelo que você me contou, estas opções podem combinar com o que você procura:')+'\n\n'+courseList(picks)+'\n\nQual delas te interessa mais? Se nenhuma, me diga a área que você prefere.':(onlyFree?'Temos opções gratuitas, sim. Qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing ou outra?\n\n'+humanSuggestion('commercial',s):'Para eu não te indicar um curso aleatório, qual área mais te interessa — Administrativo, Tecnologia, Saúde, Marketing, Idiomas, Beleza ou outra?\n\n'+humanSuggestion('commercial',s))
         }
       }
     }else if(stage==='course'){
@@ -675,8 +696,8 @@ Deno.serve(async req=>{
         next='recipient'
         patch={stage:next,status:'qualified',lead_score:72,close_probability:65,next_best_action:'Capturar contato e encaminhar para fechamento.'}
         out=askRecipient()
-      }else if(no(message)) out='Sem problema. O que pesou mais para você: valor, horário, modalidade ou o próprio curso? Posso tentar te orientar sem compromisso.'
-      else out='Pode me dizer sua dúvida. Se preferir avançar, basta responder “quero”.'
+      }else if(no(message)) out='Sem problema. O que pesou mais para você: valor, horário, modalidade ou o próprio curso? Posso tentar te orientar sem compromisso.\n\n'+humanSuggestion('commercial',s)
+      else out='Pode me dizer sua dúvida. Se preferir avançar, basta responder “quero”.\n\n'+humanSuggestion('commercial',s)
     }else if(stage==='recipient'){
       const recipient=parseRecipient(message)
       if(!recipient) out='É para você ou para outra pessoa? Pode responder, por exemplo, “para mim” ou “meu filho”.'
@@ -713,7 +734,7 @@ Deno.serve(async req=>{
       if(wantsEnroll(message)){
         patch={status:'closing',lead_score:96}
         out='Seu interesse já está registrado. A equipe da Live Connect pode finalizar a matrícula com você e confirmar os dados necessários.'
-      }else out='Claro. Pode perguntar sobre curso, valor, horário ou matrícula. Se preferir falar com uma pessoa, é só pedir “atendente”.'
+      }else out='Claro. Pode perguntar sobre curso, valor, horário ou matrícula.\n\n'+humanSuggestion('commercial',s)
     }else{
       next='discovery'
       patch={stage:'discovery'}
@@ -725,7 +746,9 @@ Deno.serve(async req=>{
       await syncMemory(sb,s.id)
     }
     await append(sb,s.id,'assistant',out,{assistant:'Lico',stage:next,bot_version:BOT_VERSION,intent:detectIntent(message)})
-    return reply(req,{ok:true,token,stage:next,message:out,lead_score:Number(patch.lead_score??s.lead_score??0),handoff:next==='handoff'})
+    const suggestedHuman=out.includes('wa.me/'+WHATSAPP_NUMBER)
+    const wa=suggestedHuman?whatsappUrl(detectIntent(message)==='price'?'price':'commercial',s):null
+    return reply(req,{ok:true,token,stage:next,message:out,lead_score:Number(patch.lead_score??s.lead_score??0),handoff:next==='handoff',whatsapp_url:wa,actions:wa?[{type:'whatsapp',label:'Falar com atendente',url:wa}]:[]})
   }catch(err){
     console.error('portal-commercial-chat',err)
     return reply(req,{ok:false,error:'internal_error'},500)
