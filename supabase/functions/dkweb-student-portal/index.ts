@@ -486,7 +486,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const usernameCandidates = [username];
-    const strippedUsername = username.replace(/^0+(?=\\d)/, "");
+    const strippedUsername = username.replace(/^0+/, "") || "0";
     if (strippedUsername && strippedUsername !== username) usernameCandidates.push(strippedUsername);
 
     let data: Record<string, unknown> | null = null;
