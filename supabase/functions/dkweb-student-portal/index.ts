@@ -485,35 +485,74 @@ Deno.serve(async (req: Request) => {
       return response(401, { ok: false, error: "invalid_credentials" });
     }
 
-    const bridgePayload = JSON.stringify({
-      action: "login",
-      username,
-      password,
-    });
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = await hmacHex(BRIDGE_SECRET, `${timestamp}.${bridgePayload}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12_000);
-    try {
-      const bridge = await fetch(BRIDGE_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-LC-Timestamp": timestamp,
-          "X-LC-Signature": signature,
-        },
-        body: bridgePayload,
-        signal: controller.signal,
-      });
-      const data = await parseJson(bridge);
-      if (!bridge.ok || data?.ok !== true) {
-        const err = String(data?.error ?? "invalid_credentials");
-        return response(
-          err === "ambiguous_credentials" ? 409 : 401,
-          { ok: false, error: err === "ambiguous_credentials" ? err : "invalid_credentials" },
-        );
-      }
+    const usernameCandidates = [username];
+    const strippedUsername = username.replace(/^0+(?=\\d)/, "");
+    if (strippedUsername && strippedUsername !== username) usernameCandidates.push(strippedUsername);
 
+    let data: Record<string, unknown> | null = null;
+    let bridgeStatus = 401;
+    let lastBridgeError = "invalid_credentials";
+
+    for (const candidate of usernameCandidates) {
+      const bridgePayload = JSON.stringify({
+        action: "login",
+        username: candidate,
+        password,
+      });
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const signature = await hmacHex(BRIDGE_SECRET, `${timestamp}.${bridgePayload}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const bridge = await fetch(BRIDGE_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-LC-Timestamp": timestamp,
+            "X-LC-Signature": signature,
+          },
+          body: bridgePayload,
+          signal: controller.signal,
+        });
+        bridgeStatus = bridge.status;
+        const candidateData = await parseJson(bridge);
+        if (bridge.ok && candidateData?.ok === true) {
+          data = candidateData;
+          if (candidate !== username) {
+            console.log("dkweb_login_normalized_username_success", {
+              original_length: username.length,
+              normalized_length: candidate.length,
+            });
+          }
+          break;
+        }
+        lastBridgeError = String(candidateData?.error ?? "invalid_credentials");
+        console.warn("dkweb_login_rejected", {
+          status: bridge.status,
+          error: lastBridgeError,
+          original_length: username.length,
+          candidate_length: candidate.length,
+          normalized_candidate: candidate !== username,
+        });
+      } catch {
+        lastBridgeError = "dkweb_bridge_unavailable";
+        bridgeStatus = 503;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    if (!data?.ok) {
+      if (lastBridgeError === "ambiguous_credentials") {
+        return response(409, { ok: false, error: "ambiguous_credentials" });
+      }
+      if (bridgeStatus === 503 || lastBridgeError === "dkweb_bridge_unavailable") {
+        return response(503, { ok: false, error: "dkweb_bridge_unavailable" });
+      }
+      return response(401, { ok: false, error: "invalid_credentials" });
+    }
+
+    try {
       const student = asObject(data.student);
       const idAluno = Number(student?.id_aluno ?? 0);
       const school = String(student?.codigo_escola ?? "").trim();
@@ -562,8 +601,6 @@ Deno.serve(async (req: Request) => {
       });
     } catch {
       return response(503, { ok: false, error: "dkweb_bridge_unavailable" });
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
